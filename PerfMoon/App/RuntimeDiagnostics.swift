@@ -10,6 +10,7 @@ final class RuntimeDiagnostics {
     private var lastMode = ""
     private var usage = SelfUsageSampler()
     private var written = 0
+    var isEnabled: Bool { output != nil }
 
     init() {
         guard let path = ProcessInfo.processInfo.environment["PERFMOON_DIAGNOSTICS_PATH"] else { return }
@@ -21,7 +22,7 @@ final class RuntimeDiagnostics {
         _ = try? output?.seekToEnd()
     }
 
-    func record(_ engine: MonitorEngine, settingsTab: String?) {
+    func record(_ engine: MonitorEngine, settingsTab: String?, details: [String: Any] = [:]) {
         guard let output, written < 8 * 1024 * 1024 else { return }
         let demands = engine.core.demands.map { demand in
             switch demand {
@@ -32,7 +33,7 @@ final class RuntimeDiagnostics {
             case .memoryProcesses: "processes"
             }
         }.sorted()
-        let mode = demands.joined(separator: ",") + "/" + (settingsTab ?? "") + "/\(engine.core.userPaused)"
+        let mode = demands.joined(separator: ",") + "/" + (settingsTab ?? "") + "/\(engine.core.userPaused)/\(engine.core.systemSuspended)"
         let now = MonitorEngine.now
         guard mode != lastMode || now - lastTime >= 10 else { return }
         let cost = usage.sample(at: now, window: now - lastTime)
@@ -47,6 +48,7 @@ final class RuntimeDiagnostics {
             "intervals": Dictionary(uniqueKeysWithValues: engine.core.intervals.map { ($0.key.rawValue, $0.value) }),
         ]
         if let cpu = cost.cpu.value { object["cpuOneCorePercent"] = cpu }
+        object.merge(details) { _, value in value }
         if let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) {
             try? output.write(contentsOf: data + Data([10]))
             written += data.count + 1

@@ -9,6 +9,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let model: DashboardModel
     private var observer: Int?
     private var demandedPage: Page?
+    private var isClosing = false
     private(set) var isLive = false
     var onClose: (() -> Void)?
 
@@ -71,7 +72,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     private func updateLiveness() {
         guard let window else { return }
-        let visible = window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
+        let visible = !isClosing && window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
         guard visible != isLive else { return }
         isLive = visible
         if visible {
@@ -100,6 +101,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowDidDeminiaturize(_ notification: Notification) { updateLiveness() }
 
     func windowWillClose(_ notification: Notification) {
+        isClosing = true
         if isLive {
             if let observer { app.engine.removeObserver(observer) }
             observer = nil
@@ -107,6 +109,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             demandedPage = nil
             isLive = false
         }
+        window?.contentViewController = nil
         onClose?()
     }
 }

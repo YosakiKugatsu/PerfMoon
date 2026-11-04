@@ -18,6 +18,7 @@ final class AppSettings {
 
     @ObservationIgnored var onChange: ((Change) -> Void)?
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let hadPreviousLaunch: Bool
     var isLiveData = false
 
     var updateInterval: UpdateInterval {
@@ -67,6 +68,7 @@ final class AppSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        hadPreviousLaunch = defaults.object(forKey: "launchAtLogin") != nil
         updateInterval = UpdateInterval(rawValue: defaults.double(forKey: "updateInterval")) ?? .one
         temperatureUnit = defaults.string(forKey: "temperatureUnit").flatMap(TemperatureUnit.init(rawValue:)) ?? .celsius
         temperatureSource = defaults.string(forKey: "temperatureSource").map(TemperatureSource.init(storageValue:)) ?? .cpuMax
@@ -80,5 +82,17 @@ final class AppSettings {
 
     private func save(_ value: Any, _ key: String) {
         defaults.set(value, forKey: key)
+    }
+
+    /// Show the window once for a fresh install. Existing configured installations
+    /// already had that introduction before this preference was added.
+    func consumeFirstLaunch() -> Bool {
+        let introduced = defaults.bool(forKey: "hasCompletedFirstLaunch")
+            || hadPreviousLaunch
+            || defaults.object(forKey: "updateInterval") != nil
+            || defaults.object(forKey: "menuTopLine") != nil
+            || defaults.object(forKey: "menuBottomLine") != nil
+        defaults.set(true, forKey: "hasCompletedFirstLaunch")
+        return !introduced
     }
 }

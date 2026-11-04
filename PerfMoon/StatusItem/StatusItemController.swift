@@ -34,6 +34,7 @@ final class StatusItemController: NSObject {
     var button: NSStatusBarButton? { item.button }
 
     var currentContent: StatusGlyph.Content? { content }
+    var itemLength: CGFloat { item.length }
 
     var height: CGFloat {
         let thickness = NSStatusBar.system.thickness

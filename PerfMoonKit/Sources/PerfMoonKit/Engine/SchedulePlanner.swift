@@ -40,7 +40,8 @@ public enum SchedulePlanner {
                     result[job] = selfUsageInterval
                 }
             case .thermal:
-                result[job] = max(userInterval, 5)
+                // Add this after the regular cadence is known.
+                break
             case .processMemory:
                 if demands.contains(.memoryProcesses) || demands.contains(.window(.memory)) {
                     result[job] = max(userInterval, 5)
@@ -49,6 +50,11 @@ public enum SchedulePlanner {
                 result[job] = visible.contains(job) ? userInterval : max(userInterval, backgroundFloor)
             }
         }
+        // Join an existing wake instead of publishing an extra snapshot between
+        // regular updates. Round down so thermal status never waits longer.
+        let cadence = result.values.min() ?? max(userInterval, backgroundFloor)
+        let thermalLimit = max(userInterval, 5)
+        result[.thermal] = cadence * max(1, (thermalLimit / cadence).rounded(.down))
         return result
     }
 }

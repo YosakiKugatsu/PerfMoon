@@ -26,7 +26,7 @@ These are 10-sample averages from this Mac, not a universal error bound. GPU act
 and frequency also matched under the GPU workload (100%, 1.62 GHz). The ANE test's Core ML
 compute plan selected Neural Engine.
 
-The current collection implementation passes 35 core tests and a live regression with
+The current collection implementation passes 37 core tests and a live regression with
 30 pause/resume cycles, six SMC reconnections, and missing-sensor recovery. Physical system
 sleep/wake, battery charging/discharging transitions, and a genuine thermal throttle event
 have not been forced on this Mac.
@@ -54,7 +54,10 @@ swift test --package-path PerfMoonKit
 ## Using the app
 
 PerfMoon is a menu bar app. Its Dock icon appears only while the main window or Settings is
-open. The app opens its window at launch; closing the window leaves the menu bar running.
+open. The first run opens a window to introduce the app; subsequent launches stay in the
+menu bar. Reopening the running app or choosing Open Window shows the main window.
+Closing the window leaves the menu bar running. Existing installations keep their settings
+and transition to menu bar startup.
 
 | Surface | How to open | Contents |
 |---|---|---|
@@ -130,12 +133,16 @@ sampled only when its list is shown, and hidden window models stop observing the
 
 History uses bounded 15-minute ring buffers. Charts draw through Canvas with peak-preserving
 downsampling and explicit gaps, rather than creating one SwiftUI node per history point.
-The regular build writes no metric history to disk.
+The regular build writes no metric history to disk. Settings pages load when first visited;
+only the visible page's data model receives updates. Thermal polling joins an existing
+sampling tick (every 4 seconds at a 2-second cadence), avoiding separate thermal-only wakes
+without extending the previous polling latency.
 
 ### Measured overhead
 
-Measured on the M5 Pro above. CPU is a share of **one core** (100% = one fully occupied
-core); memory is the process's physical footprint, in MiB.
+The following baseline captures were made for the initial release on the M5 Pro above.
+CPU is a share of **one core** (100% = one fully occupied core); memory is the process's
+physical footprint, in MiB.
 
 | Scope | Effective update interval | Measured CPU | Observed memory |
 |---|---:|---:|---:|
@@ -152,6 +159,17 @@ A separate two-hour collector run averaged 0.45% CPU with a 6.30 MiB captured pe
 roughly 5.9–6.0 MiB after warm-up. That run preceded the final fixed-buffer and same-tick
 temperature-cache refinements. It validates the collector architecture over that period;
 it is not a two-hour GUI measurement.
+
+The subsequent menu-only startup experiment measured 18.2–18.8 MiB before any SwiftUI
+surface was opened. This is a different lifecycle state from opening and closing a window;
+opening the interface can still increase retained framework memory. Final GUI verification
+of the current optimization build is pending.
+
+In a separate native comparison of about 135 seconds per variant, aligning thermal polling
+reduced scheduler wakes from 83 to 69 while all 18 history-series counts remained identical.
+The two steady CPU captures were 0.63% and 0.66%, so this comparison does not establish a CPU
+percentage reduction. Startup preference checks also cover fresh installs, legacy installs,
+and preservation of the configured metrics, interval, and units.
 
 CPU deltas reuse fixed counter storage. Temperature requests in the same scheduler tick
 share both successful and failed reads. Menu glyphs reuse fonts and shaped text, then bake

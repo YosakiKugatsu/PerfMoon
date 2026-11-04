@@ -61,15 +61,44 @@ private final class SettingsTabController: NSTabViewController {
     }
 }
 
+/// Keep an unvisited tab to an AppKit placeholder. Its SwiftUI graph is created
+/// only when AppKit first requests the selected page's view.
+@MainActor
+private final class LazySettingsPageController: NSViewController {
+    private let size: NSSize
+    private let makeContent: () -> NSViewController
+
+    init(size: NSSize, makeContent: @escaping () -> NSViewController) {
+        self.size = size
+        self.makeContent = makeContent
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        let container = NSView(frame: NSRect(origin: .zero, size: size))
+        let content = makeContent()
+        addChild(content)
+        content.view.frame = container.bounds
+        content.view.autoresizingMask = [.width, .height]
+        container.addSubview(content.view)
+        view = container
+    }
+}
+
 /// Toolbar-style Settings with five pages. Collects sensor previews and self-usage only while visible.
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private unowned let app: AppModel
     private let tabs = SettingsTabController()
-    private let support = SupportModel()
+    private var supports: [SettingsTab: SupportModel] = [:]
     private var observer: Int?
     private var activeDemand: Demand?
-    var isLive: Bool { observer != nil }
+    private var isClosing = false
+    private(set) var isLive = false
+    var loadedPageCount: Int { tabs.children.filter(\.isViewLoaded).count }
     private(set) var currentTab: SettingsTab = .general
     var onClose: (() -> Void)?
 
@@ -78,12 +107,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         tabs.tabStyle = .toolbar
         tabs.canPropagateSelectedChildViewControllerTitle = true
         for tab in SettingsTab.allCases {
-            let page = SettingsPage(tab: tab, app: app, support: support)
-            let hosting = NSHostingController(rootView: AppEnvironment(app: app) { page })
-            hosting.title = tab.title
-            hosting.sizingOptions = []
-            hosting.view.frame.size = tab.contentSize
-            let item = NSTabViewItem(viewController: hosting)
+            let support = SupportModel()
+            supports[tab] = support
+            let page = LazySettingsPageController(size: tab.contentSize) {
+                let content = SettingsPage(tab: tab, app: app, support: support)
+                let hosting = NSHostingController(rootView: AppEnvironment(app: app) { content })
+                hosting.sizingOptions = []
+                return hosting
+            }
+            page.title = tab.title
+            let item = NSTabViewItem(viewController: page)
             item.label = tab.title
             item.image = NSImage(systemSymbolName: tab.symbol, accessibilityDescription: tab.title)
             item.identifier = tab.rawValue
@@ -123,17 +156,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func updateLiveness() {
-        let visible = window?.isVisible == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true
-        if visible, observer == nil {
+        let visible = !isClosing && window?.isVisible == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true
+        isLive = visible
+        // General contains preferences only. A hidden page's model is frozen so
+        // even visited tabs retain their local UI state without rendering updates.
+        let observesData = visible && currentTab != .general
+        if observesData, observer == nil {
             observer = app.engine.addObserver { [weak self] engine in
                 guard let self else { return }
-                self.support.apply(engine, includeCatalog: self.currentTab == .cpu)
+                self.supports[self.currentTab]?.apply(engine, includeCatalog: self.currentTab == .cpu)
             }
-        } else if !visible, let observer {
+        } else if !observesData, let observer {
             app.engine.removeObserver(observer)
             self.observer = nil
         }
-        if visible { support.apply(app.engine, includeCatalog: currentTab == .cpu) }
+        if observesData { supports[currentTab]?.apply(app.engine, includeCatalog: currentTab == .cpu) }
         let wanted = visible ? currentTab.demand : nil
         guard wanted != activeDemand else { return }
         if let activeDemand { app.engine.setDemand(activeDemand, active: false) }
@@ -155,10 +192,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        isClosing = true
         if let observer { app.engine.removeObserver(observer) }
         observer = nil
         if let activeDemand { app.engine.setDemand(activeDemand, active: false) }
         activeDemand = nil
+        isLive = false
+        window?.contentViewController = nil
         onClose?()
     }
 }

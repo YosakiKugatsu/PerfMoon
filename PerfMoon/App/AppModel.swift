@@ -35,11 +35,21 @@ final class AppModel {
         statusItem.onClick = { [weak self] button in self?.panel.toggle(from: button) }
         statusItem.menuProvider = { [weak self] in self?.statusMenu() ?? NSMenu() }
         engine.addObserver { [weak self] engine in
-            if self?.settings.isLiveData != engine.isLive {
-                self?.settings.isLiveData = engine.isLive
+            guard let self else { return }
+            if self.settings.isLiveData != engine.isLive {
+                self.settings.isLiveData = engine.isLive
             }
-            self?.refreshStatusItem()
-            self?.diagnostics.record(engine, settingsTab: self?.settingsWindow?.isLive == true ? self?.settingsWindow?.currentTab.rawValue : nil)
+            self.refreshStatusItem()
+            if self.diagnostics.isEnabled {
+                self.diagnostics.record(engine, settingsTab: self.settingsWindow?.isLive == true ? self.settingsWindow?.currentTab.rawValue : nil,
+                    details: ["statusWidth": self.statusItem.button?.bounds.width ?? 0,
+                              "statusHeight": self.statusItem.button?.bounds.height ?? 0,
+                              "glyphHeight": self.statusItem.currentContent?.height ?? 0,
+                              "statusItemLength": self.statusItem.itemLength,
+                              "statusRedraws": self.statusItem.redrawCount,
+                              "settingsLoadedPages": self.settingsWindow?.loadedPageCount ?? 0,
+                              "mainWindowRetained": self.mainWindow != nil])
+            }
         }
 
         NSApp.mainMenu = MainMenu.build(app: self)
@@ -48,8 +58,12 @@ final class AppModel {
         #if DEBUG
         if DebugLaunchOptions.apply(to: self) { return }
         #endif
-        // Show live readings on the first window; the menu bar remains when it closes.
-        openMainWindow(page: nil)
+        // First run introduces the app; later launches stay in the menu bar until
+        // the user requests a window. Reopening the app still opens the window.
+        let firstLaunch = settings.consumeFirstLaunch()
+        if firstLaunch {
+            openMainWindow(page: nil)
+        }
     }
 
     // MARK: Commands

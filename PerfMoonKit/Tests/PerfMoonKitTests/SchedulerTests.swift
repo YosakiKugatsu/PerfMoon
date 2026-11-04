@@ -37,6 +37,19 @@ struct PlannerTests {
         let slow = SchedulePlanner.intervals(userInterval: 5, demands: [.sensorTable])
         #expect(slow[.sensorCatalog] == 5)
     }
+
+    @Test("Thermal polling joins regular ticks without extending its latency")
+    func alignedThermalPolling() {
+        for interval in [1.0, 2.0, 5.0] {
+            for demands: Set<Demand> in [[], [.popover]] {
+                let plan = SchedulePlanner.intervals(userInterval: interval, demands: demands)
+                let cadence = plan.values.min()!
+                let thermal = plan[.thermal]!
+                #expect(thermal.truncatingRemainder(dividingBy: cadence) == 0)
+                #expect(thermal <= max(interval, 5))
+            }
+        }
+    }
 }
 
 @MainActor
@@ -54,6 +67,19 @@ struct MonitorCoreTests {
         while let next = core.nextWakeTime(), next <= end {
             core.tick(now: next)
         }
+    }
+
+    @Test("Background collection has no thermal-only wake between two-second ticks")
+    func backgroundWakeGrid() {
+        let (core, _) = makeCore()
+        var wakes: [Double] = []
+        while let next = core.nextWakeTime(), next <= 1010 {
+            wakes.append(next)
+            core.tick(now: next)
+        }
+        #expect(wakes == [1000, 1002, 1004, 1006, 1008, 1010])
+        #expect(core.reading(.cpuTotal).status == .valid)
+        #expect(core.history.count(.cpuTotal) == 5)
     }
 
     @Test("Differenced metrics show one warm-up cycle after the first subscription")
