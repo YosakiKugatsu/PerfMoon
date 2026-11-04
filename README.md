@@ -160,16 +160,26 @@ roughly 5.9–6.0 MiB after warm-up. That run preceded the final fixed-buffer an
 temperature-cache refinements. It validates the collector architecture over that period;
 it is not a two-hour GUI measurement.
 
-The subsequent menu-only startup experiment measured 18.2–18.8 MiB before any SwiftUI
-surface was opened. This is a different lifecycle state from opening and closing a window;
-opening the interface can still increase retained framework memory. Final GUI verification
-of the current optimization build is pending.
+The current menu-only startup with the original system-button renderer measured **16.5 MiB
+and 0.85% CPU** for 150 seconds after a 30-second warm-up exclusion. No main window or
+Settings page had been created. This is a different lifecycle state from opening and
+closing a window; opening the interface can still increase retained framework memory.
+The normal Release's menu-only launch, explicit window reopening, settings-tab switching,
+search-state preservation, and window closing have been checked in the running app.
+After opening Overview and the General, CPU, and Menu Bar settings pages, then closing
+both windows, a 60-second normal-Release capture measured **0.81% CPU and 78.2–78.4 MiB**.
+The cold-start footprint is therefore not a footprint guarantee after using the interface.
 
 In a separate native comparison of about 135 seconds per variant, aligning thermal polling
 reduced scheduler wakes from 83 to 69 while all 18 history-series counts remained identical.
 The two steady CPU captures were 0.63% and 0.66%, so this comparison does not establish a CPU
 percentage reduction. Startup preference checks also cover fresh installs, legacy installs,
 and preservation of the configured metrics, interval, and units.
+
+A separate status-item image-subview experiment measured 0.82% CPU and 17.1 MiB, but its
+displayed values changed less often than the 0.85%/16.5 MiB reference. It did not establish a
+rendering benefit and was not adopted. Explicit malloc pressure relief likewise returned
+zero bytes and was removed.
 
 CPU deltas reuse fixed counter storage. Temperature requests in the same scheduler tick
 share both successful and failed reads. Menu glyphs reuse fonts and shaped text, then bake
