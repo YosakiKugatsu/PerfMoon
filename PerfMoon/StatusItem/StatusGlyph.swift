@@ -138,22 +138,24 @@ enum StatusGlyph {
 
     // MARK: Drawing
 
-    /// Two metrics, each a caps label over its value, left-aligned in fixed columns.
+    /// Two metrics, each a caps label over its value, both centered on a fixed column.
     @MainActor
     static func image(_ content: Content) -> NSImage {
         let rails = Rails(height: content.height)
         let fade: CGFloat = content.paused ? 0.6 : 1
         let metrics = [(content.topTitle, content.top, content.topStale), (content.bottomTitle, content.bottom, content.bottomStale)]
-        // Layout once per changed value and reuse the shaped lines at both backing scales.
-        let lines = metrics.map { metric in
-            (CTLineCreateWithAttributedString(rails.label(metric.0, alpha: Rails.labelAlpha * fade)),
-             CTLineCreateWithAttributedString(rails.value(metric.1, fade: fade * (metric.2 ? 0.45 : 1))))
+        // Shape and measure once per changed value; reuse the lines at both backing scales.
+        let columns: [(label: InkLine, value: InkLine)] = metrics.map { metric in
+            let template = inkTemplate(metric.1)
+            return (InkLine(rails.label(metric.0, alpha: Rails.labelAlpha * fade)),
+                    InkLine(rails.value(metric.1, fade: fade * (metric.2 ? 0.45 : 1)),
+                            measuring: template == metric.1 ? nil : rails.value(template, fade: 1)))
         }
-        return templateImage(size: NSSize(width: content.width, height: content.height), description: content.spoken) { _, context in
-            for (index, line) in lines.enumerated() {
-                let left = CGFloat(index) * (metricWidth + metricGap)
-                draw(line.0, left: left, baseline: rails.labelBaseline, context: context)
-                draw(line.1, left: left, baseline: rails.valueBaseline, context: context)
+        return templateImage(size: NSSize(width: content.width, height: content.height), description: content.spoken) { _, context, scale in
+            for (index, column) in columns.enumerated() {
+                let center = CGFloat(index) * (metricWidth + metricGap) + metricWidth / 2
+                draw(column.label, centeredAt: center, baseline: rails.labelBaseline, scale: scale, context: context)
+                draw(column.value, centeredAt: center, baseline: rails.valueBaseline, scale: scale, context: context)
             }
         }
     }
@@ -164,10 +166,11 @@ enum StatusGlyph {
     static func trendImage(_ content: Content) -> NSImage {
         let rails = Rails(height: content.height)
         let fade: CGFloat = content.paused ? 0.6 : 1
-        let title = CTLineCreateWithAttributedString(rails.label("CPU", alpha: Rails.labelAlpha * fade))
-        return templateImage(size: NSSize(width: graphWidth, height: content.height), description: "CPU usage trend") { rect, context in
-            let left = pixelRounded((rect.width - (barWidth * 4 + barSpacing * 3)) / 2)
-            draw(title, left: left, baseline: rails.labelBaseline, context: context)
+        let title = InkLine(rails.label("CPU", alpha: Rails.labelAlpha * fade))
+        return templateImage(size: NSSize(width: graphWidth, height: content.height), description: "CPU usage trend") { rect, context, scale in
+            let barsWidth = barWidth * 4 + barSpacing * 3
+            let left = pixelRounded((rect.width - barsWidth) / 2)
+            draw(title, centeredAt: left + barsWidth / 2, baseline: rails.labelBaseline, scale: scale, context: context)
 
             let bottom = rails.valueBaseline
             for index in 0..<4 {
@@ -284,13 +287,37 @@ enum StatusGlyph {
         return scaled
     }
 
-    private static func draw(_ line: CTLine, left: CGFloat, baseline: CGFloat, context: CGContext) {
-        context.textMatrix = .identity
-        context.textPosition = CGPoint(x: left, y: baseline)
-        CTLineDraw(line, context)
+    /// A shaped line and the horizontal center of its ink. Ink, not advance, so side bearings
+    /// and the labels' trailing tracking don't pull a line off its column center.
+    private struct InkLine {
+        let line: CTLine
+        let inkMidX: CGFloat
+
+        /// `probe` is measured in place of `text` when given; it must have the same layout.
+        init(_ text: NSAttributedString, measuring probe: NSAttributedString? = nil) {
+            line = CTLineCreateWithAttributedString(text)
+            let measured = probe.map { CTLineCreateWithAttributedString($0) } ?? line
+            let ink = CTLineGetBoundsWithOptions(measured, .useGlyphPathBounds)
+            inkMidX = ink.isNull || ink.width <= 0
+                ? CGFloat(CTLineGetTypographicBounds(measured, nil, nil, nil)) / 2
+                : ink.midX
+        }
     }
 
-    private static func templateImage(size: NSSize, description: String, draw: @escaping (NSRect, CGContext) -> Void) -> NSImage {
+    /// Tabular digits share one advance but not one ink box. Values are measured with every
+    /// digit set to zero, so a reading changes in place instead of shifting sideways.
+    private static func inkTemplate(_ text: String) -> String {
+        String(text.map { $0.isASCII && $0.isWholeNumber ? "0" : $0 })
+    }
+
+    /// Centers the line's ink on `center`, with its origin on the backing pixel grid.
+    private static func draw(_ text: InkLine, centeredAt center: CGFloat, baseline: CGFloat, scale: CGFloat, context: CGContext) {
+        context.textMatrix = .identity
+        context.textPosition = CGPoint(x: ((center - text.inkMidX) * scale).rounded() / scale, y: baseline)
+        CTLineDraw(text.line, context)
+    }
+
+    private static func templateImage(size: NSSize, description: String, draw: @escaping (NSRect, CGContext, CGFloat) -> Void) -> NSImage {
         let image = NSImage(size: size)
         // A drawing-handler image is rerun for each menu-bar replicant. Bake both
         // backing scales once per changed value; AppKit can reuse/tint these pixels.
@@ -307,7 +334,7 @@ enum StatusGlyph {
             NSGraphicsContext.current = graphics
             let rect = NSRect(origin: .zero, size: size)
             graphics.cgContext.clear(rect)
-            draw(rect, graphics.cgContext)
+            draw(rect, graphics.cgContext, CGFloat(scale))
             NSGraphicsContext.restoreGraphicsState()
             image.addRepresentation(bitmap)
         }
