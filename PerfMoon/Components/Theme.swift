@@ -4,8 +4,8 @@ import SwiftUI
 /// Semantic colors only; no hard-coded hex values.
 enum Palette {
     static let cpu = Color.blue
-    static let sCore = Color.blue
-    static let pCore = Color.blue.opacity(0.55)
+    static let sCore = cpu
+    static let pCore = cpu
     static let gpu = Color.teal
     static let ane = Color.purple
     static let power = Color.orange
