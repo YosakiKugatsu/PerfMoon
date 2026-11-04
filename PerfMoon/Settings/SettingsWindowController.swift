@@ -182,7 +182,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if let activeDemand { app.engine.setDemand(activeDemand, active: false) }
         activeDemand = nil
         isLive = false
+        window?.makeFirstResponder(nil)
         window?.contentViewController = nil
+        window?.toolbar = nil
+        window?.contentView = nil
+        DispatchQueue.main.async { [self] in withExtendedLifetime(self) {} }
         onClose?()
     }
 }

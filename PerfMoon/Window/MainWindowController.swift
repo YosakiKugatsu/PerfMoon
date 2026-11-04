@@ -15,7 +15,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     static let autosaveName = "PerfMoonMainWindow"
 
-    init(app: AppModel) {
+    init(app: AppModel, reusing reusableWindow: NSWindow? = nil) {
         self.app = app
         let model = DashboardModel(snapshot: app.engine.snapshot)
         self.model = model
@@ -31,25 +31,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         hosting.sceneBridgingOptions = [.toolbars, .title]
         hosting.sizingOptions = []
 
-        let window = NSWindow(
+        let window = reusableWindow ?? NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1040, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
+        // Rebuilding content must not overwrite the saved frame with temporary
+        // sizing. Re-enable autosave after normal bounds have been restored.
+        window.setFrameAutosaveName("")
         window.contentViewController = hosting
         window.title = "PerfMoon"
         window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
+        window.isRestorable = false
         window.contentMinSize = NSSize(width: 760, height: 560)
-        window.setContentSize(NSSize(width: 1040, height: 720))
         window.tabbingMode = .disallowed
+        window.setContentSize(NSSize(width: 1040, height: 720))
+        // Restore normal bounds against the current displays, including after a
+        // full-screen close. A hidden shell's current frame may be out of date.
         if !window.setFrameUsingName(Self.autosaveName) {
             window.center()
         }
-        window.setFrameAutosaveName(Self.autosaveName)
-
         super.init(window: window)
+        shouldCascadeWindows = false
+        window.setFrameAutosaveName(Self.autosaveName)
         window.delegate = self
     }
 
@@ -109,7 +115,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             demandedPage = nil
             isLive = false
         }
+        // Remove ownership bridges in the close callback, while AppKit can
+        // process view removal. Keep the controller alive until close returns.
+        window?.makeFirstResponder(nil)
         window?.contentViewController = nil
+        window?.toolbar = nil
+        window?.contentView = nil
+        // Detach before onClose can open a new controller on the same shell.
+        window?.delegate = nil
+        window = nil
+        DispatchQueue.main.async { [self] in withExtendedLifetime(self) {} }
         onClose?()
     }
 }

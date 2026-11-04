@@ -17,6 +17,8 @@ final class AppModel {
     private let diagnostics = RuntimeDiagnostics()
 
     private var mainWindow: MainWindowController?
+    // Reuse native chrome only; each open receives fresh content and a model.
+    private var mainWindowShell: NSWindow?
     private var settingsWindow: SettingsWindowController?
     private var systemObservers: [NSObjectProtocol] = []
     #if DEBUG
@@ -77,10 +79,11 @@ final class AppModel {
     func openMainWindow(page: Page?) {
         if let page { settings.selectedPage = page }
         if mainWindow == nil {
-            let controller = MainWindowController(app: self)
+            let controller = MainWindowController(app: self, reusing: mainWindowShell)
+            mainWindowShell = controller.window
             controller.onClose = { [weak self] in
                 self?.mainWindow = nil
-                self?.updateActivationPolicy()
+                DispatchQueue.main.async { [weak self] in self?.updateActivationPolicy() }
             }
             mainWindow = controller
         }
@@ -93,7 +96,7 @@ final class AppModel {
             let controller = SettingsWindowController(app: self)
             controller.onClose = { [weak self] in
                 self?.settingsWindow = nil
-                self?.updateActivationPolicy()
+                DispatchQueue.main.async { [weak self] in self?.updateActivationPolicy() }
             }
             settingsWindow = controller
         }
