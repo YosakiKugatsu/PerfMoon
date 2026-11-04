@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- PerfMoon app icon, layer 2 of 2: four CPU bars in the same 2.5 : 1.5 width-to-gap ratio as the menu bar glyph. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D3E2FF"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#bar)">
+    <rect x="164" y="571" width="120" height="221" rx="36"/>
+    <rect x="356" y="437" width="120" height="355" rx="36"/>
+    <rect x="548" y="518" width="120" height="274" rx="36"/>
+    <rect x="740" y="350" width="120" height="442" rx="36"/>
+  </g>
+</svg>

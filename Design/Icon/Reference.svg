@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Flattened reference of the intended PerfMoon icon, for comparing Icon Composer output.
+     Not used by the build. Liquid Glass lighting is added by Icon Composer, not drawn here. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2B3245"/>
+      <stop offset="1" stop-color="#0C1630"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D3E2FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="230" fill="url(#background)"/>
+  <g fill="url(#bar)">
+    <rect x="164" y="571" width="120" height="221" rx="36"/>
+    <rect x="356" y="437" width="120" height="355" rx="36"/>
+    <rect x="548" y="518" width="120" height="274" rx="36"/>
+    <rect x="740" y="350" width="120" height="442" rx="36"/>
+  </g>
+  <polyline points="104,572 224,499 416,365 608,446 800,278"
+            fill="none" stroke="#5AC8FA" stroke-width="36"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="800" cy="278" r="40" fill="#5AC8FA"/>
+  <circle cx="800" cy="278" r="16" fill="#FFFFFF"/>
+</svg>

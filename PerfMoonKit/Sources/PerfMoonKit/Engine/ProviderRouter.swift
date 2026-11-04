@@ -1,0 +1,34 @@
+import Foundation
+
+/// Keeps the UI contract stable while Debug review swaps live data for fixtures.
+@MainActor
+final class ProviderRouter: MetricProvider {
+    let fixtures: FixtureProvider
+    let live: (any MetricProvider)?
+    private var current: any MetricProvider
+
+    init(fixtures: FixtureProvider, live: (any MetricProvider)?) {
+        self.fixtures = fixtures
+        self.live = live
+        self.current = live ?? fixtures
+    }
+    var machine: MachineInfo { current.machine }
+    var sensors: [SensorInfo] { current.sensors }
+    var throttleStatus: ThrottleStatus { current.throttleStatus }
+    var processMemory: ProcessMemorySnapshot { current.processMemory }
+    var isLive: Bool { current.isLive }
+    func open(_ source: SourceID, at time: TimeInterval) -> OpenResult { current.open(source, at: time) }
+    func close(_ source: SourceID) { current.close(source) }
+    func rebaseline(_ source: SourceID, at time: TimeInterval) { current.rebaseline(source, at: time) }
+    func sample(_ job: JobID, request: SampleRequest, at time: TimeInterval) -> SampleOutcome { current.sample(job, request: request, at: time) }
+    func useFixtures() {
+        for source in SourceID.allCases { current.close(source) }
+        current = fixtures
+    }
+    func useLive() -> Bool {
+        guard let live else { return false }
+        for source in SourceID.allCases { current.close(source) }
+        current = live
+        return true
+    }
+}

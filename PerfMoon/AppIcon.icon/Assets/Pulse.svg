@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- PerfMoon app icon, layer 1 of 2: the pulse line riding above the bar tops, ending in a live dot. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <polyline points="104,572 224,499 416,365 608,446 800,278"
+            fill="none" stroke="#5AC8FA" stroke-width="36"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="800" cy="278" r="40" fill="#5AC8FA"/>
+  <circle cx="800" cy="278" r="16" fill="#FFFFFF"/>
+</svg>

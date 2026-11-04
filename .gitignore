@@ -1,0 +1,22 @@
+# Build products and logs
+build/
+.build/
+DerivedData/
+
+# Swift Package Manager
+PerfMoonKit/.build/
+PerfMoonKit/.swiftpm/
+.swiftpm/
+
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# macOS
+.DS_Store
+
+# Local profiling captures, collaboration sessions, and reference checkouts
+/.workflow/
+/CLAUDE.md
+/tools/claude_frontend.py
