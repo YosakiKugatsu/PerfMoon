@@ -134,7 +134,9 @@ sampled only when its list is shown, and hidden window models stop observing the
 History uses bounded 15-minute ring buffers. Charts draw through Canvas with peak-preserving
 downsampling and explicit gaps, rather than creating one SwiftUI node per history point.
 The regular build writes no metric history to disk. Settings pages load when first visited;
-only the visible page's data model receives updates. Thermal polling joins an existing
+only the visible page's data model receives updates. All five Settings tabs share a fixed
+600 × 580-point content size; switching tabs does not resize or animate the window.
+Thermal polling joins an existing
 sampling tick (every 4 seconds at a 2-second cadence), avoiding separate thermal-only wakes
 without extending the previous polling latency.
 

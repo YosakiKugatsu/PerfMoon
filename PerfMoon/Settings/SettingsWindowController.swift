@@ -31,15 +31,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         }
     }
 
-    var contentSize: NSSize {
-        switch self {
-        case .general: NSSize(width: 600, height: 300)
-        case .menuBar: NSSize(width: 600, height: 400)
-        case .cpu: NSSize(width: 600, height: 580)
-        case .performance: NSSize(width: 600, height: 400)
-        case .dataSources: NSSize(width: 600, height: 580)
-        }
-    }
+    static let contentSize = NSSize(width: 600, height: 580)
 
     var demand: Demand? {
         switch self {
@@ -109,7 +101,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         for tab in SettingsTab.allCases {
             let support = SupportModel()
             supports[tab] = support
-            let page = LazySettingsPageController(size: tab.contentSize) {
+            let page = LazySettingsPageController(size: SettingsTab.contentSize) {
                 let content = SettingsPage(tab: tab, app: app, support: support)
                 let hosting = NSHostingController(rootView: AppEnvironment(app: app) { content })
                 hosting.sizingOptions = []
@@ -128,7 +120,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.toolbarStyle = .preference
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-        window.setContentSize(SettingsTab.general.contentSize)
+        window.setContentSize(SettingsTab.contentSize)
+        window.contentMinSize = SettingsTab.contentSize
+        window.contentMaxSize = SettingsTab.contentSize
         window.center()
         super.init(window: window)
         window.delegate = self
@@ -151,7 +145,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private func didSelect(_ tab: SettingsTab) {
         currentTab = tab
-        resize(to: tab.contentSize)
         updateLiveness()
     }
 
@@ -181,15 +174,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     func windowDidChangeOcclusionState(_ notification: Notification) { updateLiveness() }
     func windowDidMiniaturize(_ notification: Notification) { updateLiveness() }
     func windowDidDeminiaturize(_ notification: Notification) { updateLiveness() }
-
-    private func resize(to size: NSSize) {
-        guard let window else { return }
-        let frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
-        var newFrame = window.frame
-        newFrame.origin.y += newFrame.height - frame.height
-        newFrame.size = frame.size
-        window.setFrame(newFrame, display: true, animate: window.isVisible)
-    }
 
     func windowWillClose(_ notification: Notification) {
         isClosing = true
@@ -223,6 +207,6 @@ private struct SettingsPage: View {
                 DataSourcesSettingsPage(support: support) { app.engine.retry($0) }
             }
         }
-        .frame(width: tab.contentSize.width, height: tab.contentSize.height)
+        .frame(width: SettingsTab.contentSize.width, height: SettingsTab.contentSize.height)
     }
 }
