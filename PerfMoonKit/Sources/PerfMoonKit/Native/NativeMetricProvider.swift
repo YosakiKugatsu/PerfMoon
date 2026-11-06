@@ -24,6 +24,7 @@ public final class NativeMetricProvider: MetricProvider {
     public let machine: MachineInfo
     public private(set) var sensors: [SensorInfo] = []
     public private(set) var throttleStatus: ThrottleStatus = .normal
+    public private(set) var gpuThrottleStatus: ThrottleStatus = .unavailable
     public private(set) var processMemory = ProcessMemorySnapshot()
     public var isLive: Bool { true }
 
@@ -33,9 +34,18 @@ public final class NativeMetricProvider: MetricProvider {
     private var previousMemory: (time: TimeInterval, ins: UInt64, outs: UInt64, swapIns: UInt64, swapOuts: UInt64)?
     private var reportNeedsRebuild = false
     private var lastThrottleEvidence: TimeInterval = -.infinity
+    private var lastGPUThrottleEvidence: TimeInterval = -.infinity
+    private var lastGPUThrottleSample: TimeInterval = -.infinity
+    private var gpuThrottleValidity: TimeInterval = 6
     private var names: [Int32: (start: UInt64, name: String)] = [:]
     private var temperatureTick: TimeInterval?
     private var temperatureValues: [String: Double?] = [:]
+    private let reusableMIB: [Int32]? = {
+        var mib = [Int32](repeating: 0, count: Int(CTL_MAXNAME))
+        var count = mib.count
+        guard sysctlnametomib("vm.page_reusable_count", &mib, &count) == 0 else { return nil }
+        return Array(mib.prefix(count))
+    }()
     private let recordTimings: Bool
     public private(set) var maximumSampleMilliseconds: [JobID: Double] = [:]
 
@@ -78,6 +88,8 @@ public final class NativeMetricProvider: MetricProvider {
         opened.remove(source)
         if Self.reportSources.contains(source), opened.isDisjoint(with: Self.reportSources) {
             pm_report_close(resources.report); resources.report = nil
+            lastGPUThrottleSample = -.infinity
+            gpuThrottleStatus = .unavailable
         }
         if source == .sensors {
             pm_smc_close(resources.smc); resources.smc = nil
@@ -86,6 +98,10 @@ public final class NativeMetricProvider: MetricProvider {
         if source == .battery, resources.battery != 0 { IOObjectRelease(resources.battery); resources.battery = 0 }
         if source == .cpuActivity { cpuUsage.reset() }
         if source == .memory { previousMemory = nil }
+        if source == .processMemory {
+            processMemory = ProcessMemorySnapshot()
+            names.removeAll()
+        }
     }
 
     public func rebaseline(_ source: SourceID, at time: TimeInterval) {
@@ -163,6 +179,12 @@ public final class NativeMetricProvider: MetricProvider {
         }
         guard result > 0 else { return .noNewData }
         if sample.cpu_throttle_active > 0 { lastThrottleEvidence = ProcessInfo.processInfo.systemUptime }
+        if sample.valid & 32 != 0 {
+            let now = ProcessInfo.processInfo.systemUptime
+            lastGPUThrottleSample = now
+            gpuThrottleValidity = max(6, 3 * sample.elapsed_seconds)
+            if sample.gpu_throttle_active > 0 { lastGPUThrottleEvidence = now }
+        }
         let values: [MetricKey: Double]
         switch job {
         case .cpuFrequency:
@@ -204,6 +226,14 @@ public final class NativeMetricProvider: MetricProvider {
             .memoryCached: cache, .memoryPurgeable: Double(vm.purgeable_count) * page,
             .memoryFree: Double(vm.free_count) * page,
         ]
+        if var mib = reusableMIB {
+            // XNU exposes this unsigned page counter through SYSCTL_INT.
+            var pages: UInt32 = 0
+            var size = MemoryLayout<UInt32>.size
+            if sysctl(&mib, u_int(mib.count), &pages, &size, nil, 0) == 0, size == MemoryLayout<UInt32>.size {
+                values[.memoryReusable] = Double(pages) * page
+            }
+        }
         var swap = xsw_usage(); var size = MemoryLayout<xsw_usage>.size
         if sysctlbyname("vm.swapusage", &swap, &size, nil, 0) == 0 { values[.swapUsed] = Double(swap.xsu_used) }
         let now = ProcessInfo.processInfo.systemUptime
@@ -244,6 +274,12 @@ public final class NativeMetricProvider: MetricProvider {
         }
         let recent = ProcessInfo.processInfo.systemUptime - lastThrottleEvidence < 6
         throttleStatus = ThermalPolicy.evaluate(thermalState: ProcessInfo.processInfo.thermalState.rawValue, cpuLimitPercent: limit, hardwareThrottleRecent: recent)
+        let now = ProcessInfo.processInfo.systemUptime
+        gpuThrottleStatus = ThermalPolicy.evaluateGPU(
+            thermalState: ProcessInfo.processInfo.thermalState.rawValue,
+            hardwareThrottleRecent: now - lastGPUThrottleEvidence < 6,
+            hardwareAvailable: now - lastGPUThrottleSample < gpuThrottleValidity
+        )
     }
 
     private func sampleProcesses(at time: TimeInterval) {

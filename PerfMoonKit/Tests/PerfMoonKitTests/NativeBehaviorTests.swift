@@ -11,6 +11,28 @@ struct NativeBehaviorTests {
         #expect(ThermalPolicy.evaluate(thermalState: 2, cpuLimitPercent: nil, hardwareThrottleRecent: true).isActive)
         #expect(ThermalPolicy.evaluate(thermalState: 1, cpuLimitPercent: 75, hardwareThrottleRecent: false).isActive)
         #expect(ThermalPolicy.evaluate(thermalState: 3, cpuLimitPercent: nil, hardwareThrottleRecent: false).isActive)
+        #expect(!ThermalPolicy.evaluateGPU(thermalState: 0, hardwareThrottleRecent: true, hardwareAvailable: true).isActive)
+        #expect(!ThermalPolicy.evaluateGPU(thermalState: 2, hardwareThrottleRecent: false, hardwareAvailable: true).isActive)
+        #expect(ThermalPolicy.evaluateGPU(thermalState: 2, hardwareThrottleRecent: true, hardwareAvailable: true).isActive)
+        #expect(!ThermalPolicy.evaluateGPU(thermalState: 1, hardwareThrottleRecent: false, hardwareAvailable: false).isAvailable)
+        #expect(ThermalPolicy.evaluateGPU(thermalState: 3, hardwareThrottleRecent: false, hardwareAvailable: false).isActive)
+    }
+
+    @MainActor
+    @Test("CPU and GPU throttling remain independent across the UI data contract")
+    func independentThrottleStatuses() {
+        let provider = MeasuredProvider()
+        let core = MonitorCore(provider: provider)
+        provider.throttleStatus = ThrottleStatus(isActive: true)
+        provider.gpuThrottleStatus = .normal
+        #expect(core.snapshot(now: 100).cpu.throttle.isActive)
+        #expect(!core.snapshot(now: 100).gpu.throttle.isActive)
+        provider.throttleStatus = .normal
+        provider.gpuThrottleStatus = ThrottleStatus(isActive: true)
+        #expect(!core.snapshot(now: 101).cpu.throttle.isActive)
+        #expect(core.snapshot(now: 101).gpu.throttle.isActive)
+        provider.gpuThrottleStatus = .unavailable
+        #expect(!core.snapshot(now: 102).gpu.throttle.isAvailable)
     }
 
     @Test("Process scans are absent in background and a collapsed popover")
@@ -18,8 +40,33 @@ struct NativeBehaviorTests {
         #expect(SchedulePlanner.intervals(userInterval: 1, demands: [])[.processMemory] == nil)
         #expect(SchedulePlanner.intervals(userInterval: 1, demands: [.popover])[.processMemory] == nil)
         #expect(SchedulePlanner.intervals(userInterval: 1, demands: [.memoryProcesses])[.processMemory] == 5)
-        #expect(SchedulePlanner.intervals(userInterval: 1, demands: [.window(.memory)])[.processMemory] == 5)
+        #expect(SchedulePlanner.intervals(userInterval: 1, demands: [.window(.memory)])[.processMemory] == nil)
         #expect(SchedulePlanner.intervals(userInterval: 5, demands: [.window(.cpu)])[.processMemory] == nil)
+    }
+
+    @MainActor
+    @Test("Independent Top 10 consumers share one scan and reopen with fresh data")
+    func processDemandUnion() {
+        let provider = FixtureProvider(scenario: .typical, anchor: 1000)
+        let core = MonitorCore(provider: provider)
+        core.start(now: 1000)
+        core.setDemand(.window(.memory), active: true, now: 1000)
+        core.tick(now: 1000)
+        #expect(core.intervals[.processMemory] == nil)
+        core.setDemand(.memoryProcesses, active: true, now: 1001)
+        core.tick(now: 1001)
+        #expect(core.snapshot(now: 1001).memory.processes.status == .valid)
+        core.setDemand(.windowMemoryProcesses, active: true, now: 1002)
+        let due = core.nextDue[.processMemory]
+        core.setDemand(.memoryProcesses, active: false, now: 1003)
+        #expect(core.nextDue[.processMemory] == due)
+        #expect(core.intervals[.processMemory] == 5)
+        core.setDemand(.windowMemoryProcesses, active: false, now: 1004)
+        #expect(core.intervals[.processMemory] == nil)
+        core.setDemand(.windowMemoryProcesses, active: true, now: 1020)
+        #expect(core.snapshot(now: 1020).memory.processes.status == .warming)
+        core.tick(now: 1020)
+        #expect(core.snapshot(now: 1020).memory.processes.timestamp == 1020)
     }
 
     @MainActor
@@ -54,6 +101,8 @@ struct NativeBehaviorTests {
 
 @MainActor
 private final class MeasuredProvider: MetricProvider {
+    var throttleStatus: ThrottleStatus = .normal
+    var gpuThrottleStatus: ThrottleStatus = .normal
     let machine = MachineInfo(chipName: "Test", shortChipName: "Test", gpuCoreCount: 20, physicalMemory: 64 * 1024 * 1024 * 1024)
     let sensors = [SensorInfo(id: "TEST", name: "Test Sensor", category: .other)]
     var isLive: Bool { true }

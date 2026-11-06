@@ -102,7 +102,7 @@ PMReport *pm_report_open(void) {
         bool cpu=!strcmp(group,"CPU Stats") && !strcmp(subgroup,"CPU Core Performance States");
         bool gpu=!strcmp(group,"GPU Stats") && !strcmp(subgroup,"GPU Performance States") && !strcmp(name,"GPUPH");
         bool throttle=!strcmp(group,"SoC Stats") && !strcmp(subgroup,"Events") &&
-            (!strncmp(name,"MCPU0_",6)||!strncmp(name,"MCPU1_",6)||!strncmp(name,"PCPU_",5)) &&
+            (!strncmp(name,"MCPU0_",6)||!strncmp(name,"MCPU1_",6)||!strncmp(name,"PCPU_",5)||!strncmp(name,"MGPU",4)) &&
             (strstr(name,"THROTTLE_HW_TRIG")||strstr(name,"THROTTLE_SW_TRIG"));
         if(cpu||gpu||throttle) CFArrayAppendValue(selected,item);
       }
@@ -193,7 +193,13 @@ int pm_report_read(PMReport *c,PMReportValues *out) {
             // Reading them with IOReportSimpleGetIntegerValue returns its invalid sentinel.
             for(int state=0;state<IOReportStateGetCount(item);state++) {
                 char label[32];text(IOReportStateGetNameForIndex(item,state),label,sizeof(label));
-                if(!strcmp(label,"ACT") && IOReportStateGetResidency(item,state)>0)result.cpu_throttle_active=1;
+                if(strcmp(label,"ACT"))continue;
+                int64_t residency=IOReportStateGetResidency(item,state);
+                if(residency<0)continue;
+                if(!strncmp(name,"MGPU",4)) {
+                    result.valid|=PM_REPORT_GPU_THROTTLE;
+                    if(residency>0)result.gpu_throttle_active=1;
+                } else if(residency>0)result.cpu_throttle_active=1;
             }
         }
     }

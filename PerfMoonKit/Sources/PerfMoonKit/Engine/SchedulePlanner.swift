@@ -21,7 +21,7 @@ public enum SchedulePlanner {
                 visible.formUnion(JobID.allCases.filter(\.isPrimary))
             case .window(let page):
                 visible.formUnion(page.primaryJobs)
-            case .sensorTable, .performancePage, .memoryProcesses:
+            case .sensorTable, .performancePage, .memoryProcesses, .windowMemoryProcesses, .coreHistory:
                 break
             }
         }
@@ -43,7 +43,7 @@ public enum SchedulePlanner {
                 // Add this after the regular cadence is known.
                 break
             case .processMemory:
-                if demands.contains(.memoryProcesses) || demands.contains(.window(.memory)) {
+                if demands.contains(.memoryProcesses) || demands.contains(.windowMemoryProcesses) {
                     result[job] = max(userInterval, 5)
                 }
             default:

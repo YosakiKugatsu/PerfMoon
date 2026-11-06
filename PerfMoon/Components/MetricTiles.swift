@@ -256,10 +256,13 @@ struct PanelSparkline: View {
     @Environment(\.temperatureUnit) private var unit
 
     var body: some View {
-        let values = (history?.samples(key, since: end - Self.span) ?? []).map { Double($0.value) }
+        // One read serves both the printed scale and the line.
+        let samples = history?.samples(key, since: end - Self.span) ?? []
+        let values = samples.map { Double($0.value) }
         let domain = scale.domain(values, unit: unit)
         HStack(spacing: 6) {
-            Sparkline(key: key, color: color, end: end, revision: revision, span: Self.span, domain: domain ?? 0...1)
+            Sparkline(key: key, color: color, end: end, revision: revision, span: Self.span,
+                      domain: domain ?? 0...1, samples: samples)
                 .overlay {
                     if values.isEmpty {
                         Text("No data yet").font(.pmCaption).foregroundStyle(.tertiary)

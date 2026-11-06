@@ -30,6 +30,7 @@ public final class FixtureProvider: MetricProvider {
             ? ThrottleStatus(isActive: true, explanation: "Simulated thermal-throttle evidence.")
             : .normal
     }
+    public var gpuThrottleStatus: ThrottleStatus { throttleStatus }
 
     public init(scenario: FixtureScenario = .typical, anchor: TimeInterval = Date().timeIntervalSinceReferenceDate) {
         self.model = FixtureModel(scenario: scenario, anchor: anchor)
@@ -100,6 +101,7 @@ public final class FixtureProvider: MetricProvider {
 
     public func close(_ source: SourceID) {
         openSources.remove(source)
+        if source == .processMemory { processMemory = ProcessMemorySnapshot() }
     }
 
     public func rebaseline(_ source: SourceID, at time: TimeInterval) {

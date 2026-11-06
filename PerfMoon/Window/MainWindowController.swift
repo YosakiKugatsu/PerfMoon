@@ -10,6 +10,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var observer: Int?
     private var demandedPage: Page?
     private var isClosing = false
+    private var memoryProcessListVisible = false
     private(set) var isLive = false
     var onClose: (() -> Void)?
 
@@ -22,7 +23,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         let actions = MainActions(
             togglePause: { [unowned app] in app.togglePause() },
-            openSettings: { [unowned app] tab in app.openSettings(tab: tab) }
+            openSettings: { [unowned app] tab in app.openSettings(tab: tab) },
+            setMemoryProcessListVisible: { [unowned app] visible in app.setMainMemoryProcessListVisible(visible) }
         )
         let root = AppEnvironment(app: app) {
             MainView(model: model, settings: app.settings, machine: app.engine.core.machine, actions: actions)
@@ -74,6 +76,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         updateDemand()
     }
 
+    func setMemoryProcessListVisible(_ visible: Bool) {
+        guard !isClosing else { return }
+        memoryProcessListVisible = visible
+        updateProcessDemand()
+    }
+
+    private func updateProcessDemand() {
+        app.engine.setDemand(.windowMemoryProcesses, active: isLive && app.settings.selectedPage == .memory && memoryProcessListVisible)
+    }
+
     // MARK: Liveness
 
     private func updateLiveness() {
@@ -81,6 +93,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let visible = !isClosing && window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
         guard visible != isLive else { return }
         isLive = visible
+        app.engine.setDemand(.coreHistory, active: visible)
+        updateProcessDemand()
         if visible {
             observer = app.engine.addObserver { [weak model] engine in
                 model?.apply(engine.snapshot)
@@ -95,6 +109,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func updateDemand() {
+        updateProcessDemand()
         let page = app.settings.selectedPage
         guard page != demandedPage else { return }
         if let demandedPage { app.engine.setDemand(.window(demandedPage), active: false) }
@@ -108,6 +123,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         isClosing = true
+        app.engine.setDemand(.coreHistory, active: false)
+        app.engine.setDemand(.windowMemoryProcesses, active: false)
+        app.engine.core.discardCoreHistory()
         if isLive {
             if let observer { app.engine.removeObserver(observer) }
             observer = nil

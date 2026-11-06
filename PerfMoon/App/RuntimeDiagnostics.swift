@@ -31,6 +31,8 @@ final class RuntimeDiagnostics {
             case .sensorTable: "sensors"
             case .performancePage: "selfUsage"
             case .memoryProcesses: "processes"
+            case .windowMemoryProcesses: "windowProcesses"
+            case .coreHistory: "coreHistory"
             }
         }.sorted()
         let mode = demands.joined(separator: ",") + "/" + (settingsTab ?? "") + "/\(engine.core.userPaused)/\(engine.core.systemSuspended)"
@@ -46,6 +48,10 @@ final class RuntimeDiagnostics {
             "footprintBytes": cost.footprint.value ?? 0,
             "requestedInterval": engine.core.userInterval,
             "intervals": Dictionary(uniqueKeysWithValues: engine.core.intervals.map { ($0.key.rawValue, $0.value) }),
+            "coreHistorySeries": SeriesKey.allCases.filter { $0.isPerCore && engine.history.series($0) != nil }.count,
+            "coreHistorySamples": SeriesKey.allCases.filter(\.isPerCore).reduce(0) { $0 + engine.history.count($1) },
+            "processTimestamp": engine.snapshot.memory.processes.timestamp as Any? ?? NSNull(),
+            "processRows": engine.snapshot.memory.processes.entries.count,
         ]
         if let cpu = cost.cpu.value { object["cpuOneCorePercent"] = cpu }
         object.merge(details) { _, value in value }

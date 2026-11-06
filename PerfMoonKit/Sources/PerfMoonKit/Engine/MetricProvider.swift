@@ -49,6 +49,7 @@ public protocol MetricProvider: AnyObject {
     var machine: MachineInfo { get }
     var sensors: [SensorInfo] { get }
     var throttleStatus: ThrottleStatus { get }
+    var gpuThrottleStatus: ThrottleStatus { get }
     var processMemory: ProcessMemorySnapshot { get }
     var isLive: Bool { get }
 
@@ -63,6 +64,7 @@ public protocol MetricProvider: AnyObject {
 
 public extension MetricProvider {
     var throttleStatus: ThrottleStatus { .unavailable }
+    var gpuThrottleStatus: ThrottleStatus { .unavailable }
     var processMemory: ProcessMemorySnapshot { ProcessMemorySnapshot() }
     var isLive: Bool { false }
 }

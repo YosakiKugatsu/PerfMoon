@@ -4,10 +4,11 @@ import Testing
 @MainActor
 @Suite("Per-core history")
 struct CoreHistoryTests {
-    private func makeCore() -> (MonitorCore, FixtureProvider) {
+    private func makeCore(recordHistory: Bool = true) -> (MonitorCore, FixtureProvider) {
         let provider = FixtureProvider(scenario: .singleCoreSaturated, anchor: 1000)
         let core = MonitorCore(provider: provider)
         core.setUserInterval(2, now: 1000)
+        core.setDemand(.coreHistory, active: recordHistory, now: 1000)
         core.start(now: 1000)
         return (core, provider)
     }
@@ -112,4 +113,58 @@ struct CoreHistoryTests {
         #expect(CoreID.all.allSatisfy { history.count(.coreTemperature($0)) == 0 })
         #expect(CoreID.all.allSatisfy { history.count(.coreUsage($0)) > 0 })
     }
+    @Test("Background and popover preserve aggregate history and current cores without per-core buffers")
+    func backgroundHistoryIsAbsent() {
+        let (background, _) = makeCore(recordHistory: false)
+        let (visible, _) = makeCore()
+        advance(background, until: 1040)
+        advance(visible, until: 1040)
+        #expect(background.sampleCount == visible.sampleCount)
+        #expect(background.intervals == visible.intervals)
+        for key in SeriesKey.allCases where !key.isPerCore {
+            #expect(background.history.samples(key, since: 0) == visible.history.samples(key, since: 0))
+        }
+        background.setDemand(.popover, active: true, now: 1040)
+        advance(background, until: 1050)
+        for id in CoreID.all {
+            #expect(background.reading(.core(id.flatIndex)).status == .valid)
+            #expect(background.history.series(.coreUsage(id)) == nil)
+            #expect(background.history.series(.coreTemperature(id)) == nil)
+        }
+        #expect(background.history.last(.gpuPower)?.time == 1050)
+        // Pause/failure breaks must not allocate absent series.
+        background.setUserPaused(true, now: 1051)
+        #expect(SeriesKey.allCases.filter(\.isPerCore).allSatisfy { background.history.series($0) == nil })
+    }
+
+    @Test("Main-window visibility releases buffers and reopening starts new history")
+    func visibilityLifecycle() {
+        let (core, _) = makeCore(recordHistory: false)
+        advance(core, until: 1010)
+        core.setDemand(.coreHistory, active: true, now: 1011)
+        core.setDemand(.window(.cpu), active: true, now: 1011)
+        advance(core, until: 1018)
+        let first = core.history.count(.coreUsage(CoreID(flatIndex: 0)))
+        #expect(first > 0)
+        core.setDemand(.window(.cpu), active: false, now: 1019)
+        core.setDemand(.window(.memory), active: true, now: 1019)
+        #expect(core.history.count(.coreUsage(CoreID(flatIndex: 0))) == first)
+        advance(core, until: 1022)
+        core.setDemand(.coreHistory, active: false, now: 1023)
+        let pausedCount = core.history.count(.coreUsage(CoreID(flatIndex: 0)))
+        advance(core, until: 1030)
+        #expect(core.history.count(.coreUsage(CoreID(flatIndex: 0))) == pausedCount)
+        core.discardCoreHistory()
+        #expect(SeriesKey.allCases.filter(\.isPerCore).allSatisfy { core.history.series($0) == nil })
+        advance(core, until: 1040)
+        core.setDemand(.coreHistory, active: true, now: 1041)
+        advance(core, until: 1044)
+        for id in CoreID.all {
+            let samples = core.history.samples(.coreUsage(id), since: 0)
+            #expect(samples.first?.time == 1042)
+            #expect(samples.first?.startsSegment == true)
+            #expect(samples.count == 2)
+        }
+    }
+
 }

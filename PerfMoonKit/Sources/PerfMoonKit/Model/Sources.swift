@@ -92,7 +92,7 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
         case .memory:
             [
                 MetricDescriptor("Used", quality: .derived, window: .instant),
-                MetricDescriptor("App, Wired, Compressed, Cached, Free", quality: .observed, window: .instant),
+                MetricDescriptor("App, Reusable, Wired, Compressed, Cached, Free", quality: .observed, window: .instant),
                 MetricDescriptor("Swap Used", quality: .observed, window: .instant),
                 MetricDescriptor("Paging and Swapping Rates", quality: .derived, window: .updateInterval),
             ]
@@ -186,7 +186,7 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
         case .memory:
             [
                 .memoryUsed, .memoryApp, .memoryWired, .memoryCompressed, .memoryCached,
-                .memoryPurgeable, .memoryFree, .swapUsed, .pageIns, .pageOuts, .swapIns, .swapOuts,
+                .memoryPurgeable, .memoryReusable, .memoryFree, .swapUsed, .pageIns, .pageOuts, .swapIns, .swapOuts,
             ]
         case .memoryPressure: [.memoryPressure]
         case .temperatures, .sensorCatalog, .selfUsage, .thermal, .processMemory: []
@@ -202,7 +202,7 @@ public enum MetricKey: Hashable, Sendable {
     case gpuUsage, gpuFrequency
     case powerInput, powerSystem, powerBattery
     case batteryState, adapterConnected
-    case memoryUsed, memoryApp, memoryWired, memoryCompressed, memoryCached, memoryPurgeable, memoryFree, swapUsed
+    case memoryUsed, memoryApp, memoryWired, memoryCompressed, memoryCached, memoryPurgeable, memoryReusable, memoryFree, swapUsed
     case pageIns, pageOuts, swapIns, swapOuts
     case memoryPressure
     case sensor(String)
@@ -230,7 +230,7 @@ public enum MetricKey: Hashable, Sendable {
         case .cpuPower, .gpuPower, .anePower, .powerInput, .powerSystem, .powerBattery: .watts
         case .batteryState, .adapterConnected, .memoryPressure: .level
         case .memoryUsed, .memoryApp, .memoryWired, .memoryCompressed, .memoryCached,
-             .memoryPurgeable, .memoryFree, .swapUsed:
+             .memoryPurgeable, .memoryReusable, .memoryFree, .swapUsed:
             .bytes
         case .pageIns, .pageOuts, .swapIns, .swapOuts: .perSecond
         case .sensor, .cpuTemperature, .gpuTemperature, .coreTemperature: .celsius
@@ -280,6 +280,10 @@ public enum Demand: Hashable, Sendable {
     case sensorTable
     case performancePage
     case memoryProcesses
+    /// Separate owners prevent one surface from cancelling another's process scan.
+    case windowMemoryProcesses
+    /// Records per-core history while the main window is visible. Adds no collection jobs.
+    case coreHistory
 }
 
 public enum Page: String, CaseIterable, Sendable, Identifiable, Hashable {

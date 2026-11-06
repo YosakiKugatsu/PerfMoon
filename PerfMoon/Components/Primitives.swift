@@ -240,6 +240,45 @@ struct BatteryStatusLabel: View {
     }
 }
 
+/// Matches the memory badge's compact status dot and label in panel headers.
+struct ThermalStatusBadge: View {
+    let status: ThrottleStatus
+    let device: String
+
+    @Environment(\.monitorPaused) private var paused
+
+    private var title: String { status.isActive ? "Throttling" : "Normal" }
+    private var explanation: String {
+        if !status.isAvailable { return "\(device) throttling status is not available." }
+        return status.explanation.isEmpty ? "No \(device) thermal throttling detected." : status.explanation
+    }
+
+    var body: some View {
+        Group {
+            if status.isAvailable {
+                HStack(spacing: 4) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Palette.pressure(status.isActive ? .warning : .normal).opacity(paused ? 0.5 : 1))
+                    Text(title)
+                        .font(.pmCaption)
+                        .foregroundStyle(paused ? .secondary : .primary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(device) \(title)")
+                .accessibilityValue(explanation)
+            } else {
+                Text(Format.placeholder)
+                    .font(.pmCaption)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("\(device) throttling status unavailable")
+            }
+        }
+        .fixedSize()
+        .help(explanation)
+    }
+}
+
 /// Shown only while the data layer reports active thermal throttling. Never inferred by the UI.
 struct ThrottleBadge: View {
     let status: ThrottleStatus

@@ -8,6 +8,10 @@ struct PerfMoonProbe {
     @MainActor
     static func main() async throws {
         let args = CommandLine.arguments
+        if args.contains("--benchmark-history") {
+            benchmarkHistory()
+            return
+        }
         func option(_ name: String, fallback: String) -> String {
             guard let index = args.firstIndex(of: name), index + 1 < args.count else { return fallback }
             return args[index + 1]
@@ -19,7 +23,11 @@ struct PerfMoonProbe {
         let engine = MonitorEngine(fixtures: FixtureProvider(), liveProvider: native)
         engine.start(scenario: .typical, interval: UpdateInterval(rawValue: interval) ?? .one, temperatureSource: .cpuMax)
         if mode == "sensors" { engine.setDemand(.sensorTable, active: true) }
-        else if let page = Page(rawValue: mode) { engine.setDemand(.window(page), active: true) }
+        else if let page = Page(rawValue: mode) {
+            engine.setDemand(.window(page), active: true)
+            engine.setDemand(.coreHistory, active: true)
+        }
+        if args.contains("--core-history") { engine.setDemand(.coreHistory, active: true) }
         if mode == "processes" { engine.setDemand(.memoryProcesses, active: true) }
         emit(["type": "configuration", "chip": native.machine.chipName,
               "memoryBytes": native.machine.physicalMemory, "gpuCores": native.machine.gpuCoreCount,
@@ -41,6 +49,8 @@ struct PerfMoonProbe {
             put("cpuC", s.cpu.temperature); put("gpuPercent", s.gpu.usage); put("gpuGHz", s.gpu.frequency)
             put("gpuC", s.gpu.temperature); put("gpuW", s.gpu.power); put("aneW", s.gpu.anePower)
             put("memoryUsed", s.memory.used); put("memoryPressure", s.memory.pressure)
+            put("memoryApp", s.memory.app); put("memoryReusable", s.memory.reusable)
+            put("memoryWired", s.memory.wired); put("memoryCompressed", s.memory.compressed)
             put("inputW", s.power.input); put("systemW", s.power.system); put("batteryW", s.power.battery)
             put("batteryState", s.power.batteryState); put("adapterConnected", s.power.adapterConnected)
             metrics["type"] = "sample"; metrics["epoch"] = Date().timeIntervalSince1970
@@ -48,6 +58,8 @@ struct PerfMoonProbe {
             metrics["energyWindow"] = s.cpu.power.window
             metrics["elapsed"] = ProcessInfo.processInfo.systemUptime - began
             metrics["throttle"] = native.throttleStatus.isActive
+            metrics["gpuThrottleAvailable"] = native.gpuThrottleStatus.isAvailable
+            metrics["gpuThrottling"] = native.gpuThrottleStatus.isAvailable ? native.gpuThrottleStatus.isActive as Any : NSNull()
             metrics["corePercent"] = s.cpu.cores.map { $0.value as Any? ?? NSNull() }
             if mode == "processes" || mode == "memory" {
                 metrics["inaccessibleProcesses"] = native.processMemory.inaccessibleProcessCount
@@ -61,6 +73,30 @@ struct PerfMoonProbe {
               "maxSampleMilliseconds": Dictionary(uniqueKeysWithValues: native.maximumSampleMilliseconds.map { ($0.key.rawValue, $0.value) }),
               "historyCounts": Dictionary(uniqueKeysWithValues: SeriesKey.allCases.map { ($0.rawValue, engine.history.count($0)) })])
         engine.setUserPaused(true)
+    }
+
+    @MainActor
+    private static func benchmarkHistory() {
+        // Same samples and scheduling, alternating only the per-core history demand.
+        let steps = 10_000
+        for trial in 0..<8 {
+            let active = trial % 2 == 0
+            let core = MonitorCore(provider: FixtureProvider(scenario: .typical, anchor: 1000))
+            core.setUserInterval(2, now: 1000)
+            core.setDemand(.coreHistory, active: active, now: 1000)
+            core.start(now: 1000)
+            let start = ContinuousClock.now
+            for step in 0..<steps { core.tick(now: 1000 + Double(step * 2)) }
+            let elapsed = start.duration(to: .now)
+            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+            let coreBytes = SeriesKey.allCases.filter(\.isPerCore).reduce(0) { total, key in
+                total + (core.history.series(key).map { $0.capacity * MemoryLayout<HistorySample>.stride } ?? 0)
+            }
+            let aggregateCounts = Dictionary(uniqueKeysWithValues: SeriesKey.allCases.filter { !$0.isPerCore }.map { ($0.rawValue, core.history.count($0)) })
+            emit(["type": "historyBenchmark", "trial": trial, "coreHistory": active,
+                  "seconds": seconds, "simulatedTicks": steps, "sampleCount": core.sampleCount,
+                  "coreBufferBytes": coreBytes, "aggregateHistoryCounts": aggregateCounts])
+        }
     }
 
     @MainActor

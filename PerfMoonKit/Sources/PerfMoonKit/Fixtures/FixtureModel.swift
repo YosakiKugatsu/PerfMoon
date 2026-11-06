@@ -192,6 +192,7 @@ struct FixtureModel: Sendable {
             .memoryCompressed: compressed * gib,
             .memoryCached: cached * gib,
             .memoryPurgeable: purgeable * gib,
+            .memoryReusable: min(app, max(0, app * 0.28)) * gib,
             .memoryFree: free * gib,
             .swapUsed: swap * gib,
             .pageIns: max(0, pageIns),

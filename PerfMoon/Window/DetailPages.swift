@@ -87,11 +87,17 @@ struct GPUPage: View {
 
 // MARK: - Memory
 
+/// Composition first, then history beside the full breakdown. Top 10 is last and collapsed
+/// by default; processes are scanned only while it is shown on the visible page.
 struct MemoryPage: View {
     let model: DashboardModel
     let context: ChartContext
+    /// Reports whether the process list is on screen. False when collapsed or when the page goes away.
+    let setProcessListVisible: (Bool) -> Void
 
     @State private var width: CGFloat = 800
+    /// Not persisted: each visit starts collapsed, so a scan starts only after a click.
+    @State private var showsProcesses = false
 
     var body: some View {
         let memory = model.memory
@@ -112,20 +118,25 @@ struct MemoryPage: View {
                             ReadingText.bytes(memory.available, font: .pmStatNumber)
                         }
                         .accessibilityElement(children: .combine)
+                        .help(MemoryPart.available.help)
                     }
-                    Meter(fraction: memory.used.shownValue.map { $0 / memory.physical }, color: Palette.memory, height: 10)
-                    HStack(spacing: 14) {
-                        LegendKey(title: "Used", color: Palette.memory)
-                        LegendKey(title: "Available", color: Color.secondary.opacity(0.35))
-                    }
+                    MemoryCompositionView(memory: memory, layout: .window)
                 }
             }
 
+            // The chart stretches to the table's height, so neither card leaves a gap.
             EqualHeightRow {
                 Card(stretches: true) {
                     VStack(alignment: .leading, spacing: 10) {
-                        CardHeader(title: "Top 10 Processes", subtitle: "by memory")
-                        ProcessMemoryList(snapshot: memory.processes, showsPID: width >= 700)
+                        CardHeader(title: "Used") {
+                            ReadingText.bytes(memory.used, font: .pmCaptionNumber, emphasis: .secondary)
+                        }
+                        HistoryChart(
+                            series: [ChartSeries(key: .memoryUsed, name: "Used", color: Palette.memory, style: .lineAndArea)],
+                            scale: .bytes(maximum: memory.physical), range: context.range, end: context.end, revision: context.revision,
+                            accessibilityName: "Memory used"
+                        )
+                        .frame(minHeight: 130, maxHeight: .infinity)
                     }
                 }
                 Card(stretches: true) {
@@ -137,6 +148,8 @@ struct MemoryPage: View {
                         }
                         VStack(spacing: 0) {
                             MetricRow(label: "App Memory", reading: memory.app, kind: .bytes)
+                            MetricRow(label: "Reusable", reading: memory.reusable, kind: .bytes, indent: true)
+                                .help(MemoryPart.reusable.help)
                             MetricRow(label: "Wired Memory", reading: memory.wired, kind: .bytes)
                             MetricRow(label: "Compressed", reading: memory.compressed, kind: .bytes)
                             MetricRow(label: "Cached Files", reading: memory.cached, kind: .bytes)
@@ -148,21 +161,8 @@ struct MemoryPage: View {
                 }
             }
 
-            EqualHeightRow {
-                ChartCard(title: "Pressure", height: 130) {
-                    EmptyView()
-                } chart: {
-                    LevelChart(key: .memoryPressure, kind: .pressure, range: context.range, end: context.end, revision: context.revision)
-                }
-                ChartCard(title: "Used", height: 130) {
-                    EmptyView()
-                } chart: {
-                    HistoryChart(
-                        series: [ChartSeries(key: .memoryUsed, name: "Used", color: Palette.memory, style: .lineAndArea)],
-                        scale: .bytes(maximum: memory.physical), range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "Memory used"
-                    )
-                }
+            ChartCard(title: "Pressure", height: 110) {
+                LevelChart(key: .memoryPressure, kind: .pressure, range: context.range, end: context.end, revision: context.revision)
             }
 
             StatStrip {
@@ -179,7 +179,29 @@ struct MemoryPage: View {
                     ReadingText.rate(memory.swapOuts, font: .pmStatNumber)
                 }
             }
+
+            // Collapsed, this is a single header row rather than a tall empty card.
+            Card {
+                VStack(alignment: .leading, spacing: 10) {
+                    CardHeader(title: "Top 10 Processes", subtitle: "by memory") {
+                        Text("Scanned only while shown.")
+                            .font(.pmCaption)
+                            .foregroundStyle(.tertiary)
+                        Button(showsProcesses ? "Hide" : "Show") { showsProcesses.toggle() }
+                            .controlSize(.small)
+                            .help(showsProcesses ? "Hide the process list and stop scanning" : "Show the 10 processes using the most memory")
+                            .accessibilityLabel(showsProcesses ? "Hide Top 10 Processes" : "Show Top 10 Processes")
+                            .accessibilityValue(showsProcesses ? "Expanded" : "Collapsed")
+                    }
+                    if showsProcesses {
+                        ProcessMemoryList(snapshot: memory.processes, showsPID: width >= 700)
+                    }
+                }
+            }
         }
+        .onAppear { setProcessListVisible(showsProcesses) }
+        .onChange(of: showsProcesses) { _, visible in setProcessListVisible(visible) }
+        .onDisappear { setProcessListVisible(false) }
     }
 }
 
@@ -226,7 +248,8 @@ private struct MemoryExplanation: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("How Memory Is Counted").font(.headline)
             Text("Used is App Memory + Wired Memory + Compressed. Available is physical memory minus Used.")
-            Text("Cached Files holds recently used files and is reused when apps need memory. Purgeable is part of Cached Files, so the two overlap and aren't added together.")
+            Text("Reusable is part of App Memory: memory apps have released for macOS to reclaim. It's still resident and included in Used. The bar shows it apart from the rest of App Memory, which appears as Apps.")
+            Text("Cached Files holds recently used files and is reused when apps need memory. It isn't counted in Used. Purgeable is part of Cached Files, so the two overlap and aren't added together.")
             Text("Swap Used is memory written to disk. Pressure is the level macOS reports: Normal, Warning, or Critical.")
         }
         .foregroundStyle(.secondary)

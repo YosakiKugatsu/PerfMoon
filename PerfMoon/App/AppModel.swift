@@ -76,6 +76,10 @@ final class AppModel {
         engine.toggleUserPaused()
     }
 
+    func setMainMemoryProcessListVisible(_ visible: Bool) {
+        mainWindow?.setMemoryProcessListVisible(visible)
+    }
+
     func openMainWindow(page: Page?) {
         if let page { settings.selectedPage = page }
         if mainWindow == nil {

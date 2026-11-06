@@ -34,6 +34,12 @@ public enum SeriesKey: String, Hashable, Sendable, CaseIterable {
         coreTemperatureKeys[core.flatIndex]
     }
 
+    private static let perCoreKeys = Set(coreUsageKeys + coreTemperatureKeys)
+
+    public var isPerCore: Bool {
+        Self.perCoreKeys.contains(self)
+    }
+
     /// Discrete levels are drawn as steps, never interpolated.
     public var isLevel: Bool {
         self == .memoryPressure || self == .batteryState
@@ -71,7 +77,7 @@ public final class HistoryStore {
     }
 
     public func markBreak(_ key: SeriesKey) {
-        series[key, default: TimeSeries()].markBreak()
+        series[key]?.markBreak()
     }
 
     public func markBreak(source: SourceID) {
@@ -88,6 +94,11 @@ public final class HistoryStore {
 
     public func clear(_ key: SeriesKey) {
         series[key]?.removeAll()
+    }
+
+    /// Drop storage as well as samples when a series has no visible consumer.
+    public func remove(_ key: SeriesKey) {
+        series.removeValue(forKey: key)
     }
 
     public func removeAll() {

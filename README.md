@@ -101,6 +101,10 @@ rows; a focused row shows a soft highlight.
 - The panel has a fixed width and no internal scrollbar. The separate CPU settings list
   remains scrollable and searchable.
 
+CPU and GPU card headers show Normal or Throttling with the same compact status style as
+Memory. Each uses its own evidence; GPU throttle events share the existing IOReport sample
+and add no timer. Low frequency or a high sensor temperature alone does not trigger the badge.
+
 ### CPU details
 
 The CPU page puts overall Usage and Temperature charts side by side. S-Core is a solid
@@ -110,12 +114,24 @@ histories. Only the selected core's two detail charts are rendered. They follow 
 1 / 5 / 15-minute range as the overall charts, and can be closed from the inspector or by
 selecting the same core again.
 
+Per-core histories are recorded only while the main window is visible. Covering or minimizing
+it stops recording and marks a gap; closing it releases all 36 per-core buffers. Reopening
+starts a new core history. Aggregate histories selectable in the panel continue in the background.
 Core usage histories reuse the existing per-core CPU samples. Temperature histories record
 only fresh readings from each mapped sensor. They do not add hardware polling: with a custom
 CPU temperature source, a core sensor may first be requested when the CPU page opens, so its
 history can start later than the usage history. Uncollected or missing readings remain gaps.
 The inspector identifies the matched sensor and explains that it reads the area near the core;
 a core without a sensor mapping is shown explicitly instead of receiving an estimated value.
+
+### Memory details
+
+Usage shows a physical-capacity composition: Wired, Compressed, App, Reusable, and Available.
+Reusable pages are still resident; they are shown separately within the existing App/Used
+capacity and are never added again to Used or Available. Cached Files, Purgeable, and Free
+remain diagnostic counters in Breakdown because their VM accounting overlaps.
+Top 10 Processes in the main window starts collapsed. Process scans run only while a visible
+main-window list or the panel's Top 10 mode requests them, using a single shared scan job.
 
 ### Notes on readings
 

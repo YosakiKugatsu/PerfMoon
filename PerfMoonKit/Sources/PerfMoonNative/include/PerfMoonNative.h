@@ -16,6 +16,7 @@ typedef struct {
     double s_ghz, p_ghz, gpu_ghz, gpu_percent;
     double elapsed_seconds;
     double cpu_throttle_active;
+    double gpu_throttle_active;
     uint32_t valid;
 } PMReportValues;
 enum {
@@ -23,7 +24,8 @@ enum {
     PM_REPORT_GPU_POWER = 2,
     PM_REPORT_ANE_POWER = 4,
     PM_REPORT_CPU_FREQUENCY = 8,
-    PM_REPORT_GPU_ACTIVITY = 16
+    PM_REPORT_GPU_ACTIVITY = 16,
+    PM_REPORT_GPU_THROTTLE = 32
 };
 PMReport *pm_report_open(void);
 void pm_report_close(PMReport *context);

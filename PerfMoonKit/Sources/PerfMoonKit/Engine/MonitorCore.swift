@@ -70,6 +70,7 @@ public final class MonitorCore {
     private var gpuSensorIDs: [String] = []
     private var mappedSensorIDs: [CoreID: String] = [:]
     private var lastTemperatureRequest: [String] = []
+    private var processSnapshotIsFresh = false
 
     public static let dueTolerance: TimeInterval = 0.005
     public static let staleCycles: Double = 3
@@ -117,6 +118,7 @@ public final class MonitorCore {
         readings[.cpuTemperature] = .pending(.celsius, source: .sensors, quality: .derived)
         readings[.gpuTemperature] = .pending(.celsius, source: .sensors, quality: .derived)
         lastTemperatureRequest = []
+        processSnapshotIsFresh = false
         historyRevision += 1
     }
 
@@ -149,7 +151,26 @@ public final class MonitorCore {
         let changed = active ? demands.insert(demand).inserted : demands.remove(demand) != nil
         guard changed else { return }
         if demand == .performancePage, active { selfSampler.reset() }
+        if demand == .coreHistory, !active {
+            for key in SeriesKey.allCases where key.isPerCore { history.markBreak(key) }
+            historyRevision += 1
+        }
+        if demand == .memoryProcesses || demand == .windowMemoryProcesses {
+            // After the final consumer closes, reopening waits for a new scan.
+            if !demands.contains(.memoryProcesses) && !demands.contains(.windowMemoryProcesses) {
+                processSnapshotIsFresh = false
+                provider.close(.processMemory)
+                sources[.processMemory]?.phase = .idle
+                sources[.processMemory]?.lastUpdated = nil
+                sources[.processMemory]?.baselineAt = nil
+            }
+        }
         replan(now: now)
+    }
+
+    public func discardCoreHistory() {
+        for key in SeriesKey.allCases where key.isPerCore { history.remove(key) }
+        historyRevision += 1
     }
 
     /// A source change starts a new temperature series; the old one is discarded, never relabeled.
@@ -341,9 +362,11 @@ public final class MonitorCore {
             markStaleIfNeeded(job, interval: interval, now: now)
         case .values(let values):
             sources[source]?.lastUpdated = now
+            if job == .processMemory { processSnapshotIsFresh = true }
             apply(values, job: job, request: request, interval: interval, now: now)
         case .measured(let values, let window):
             sources[source]?.lastUpdated = now
+            if job == .processMemory { processSnapshotIsFresh = true }
             apply(values, job: job, request: request, interval: interval, now: now, sampleWindow: window)
         }
     }
@@ -384,6 +407,10 @@ public final class MonitorCore {
                 continue
             }
             guard let value = values[key] else {
+                if key == .memoryReusable {
+                    readings[key] = MetricReading(value: nil, unit: .bytes, status: .unavailable(.unsupported), source: .memory)
+                    continue
+                }
                 // The provider had nothing new for this key.
                 if var reading = readings[key], let timestamp = reading.timestamp,
                    now - timestamp > Self.staleCycles * interval, reading.status == .valid {
@@ -395,6 +422,7 @@ public final class MonitorCore {
             guard value.isFinite else { continue }
             readings[key] = MetricReading(value: value, unit: key.unit, status: .valid, timestamp: now, window: key.isDifferenced ? (sampleWindow ?? interval) : 0, source: job.source, quality: key.quality)
             if let series = key.series {
+                if case .core = key, !demands.contains(.coreHistory) { continue }
                 history.append(series, time: now, value: value, expectedInterval: interval)
             }
         }
@@ -477,7 +505,7 @@ public final class MonitorCore {
         // A selected custom sensor may leave other cores unrequested in the
         // background. Record only fresh mapped reads; never extend a cached
         // value into a period when that core was not actually sampled.
-        for core in CoreID.all {
+        for core in CoreID.all where demands.contains(.coreHistory) {
             let key = SeriesKey.coreTemperature(core)
             if let reading = readings[.coreTemperature(core.flatIndex)],
                reading.status == .valid, reading.timestamp == now,
@@ -631,7 +659,8 @@ public final class MonitorCore {
             frequency: reading(.gpuFrequency),
             temperature: reading(.gpuTemperature),
             power: reading(.gpuPower),
-            anePower: reading(.anePower)
+            anePower: reading(.anePower),
+            throttle: provider.gpuThrottleStatus
         )
         let memory = MemorySnapshot(
             physical: provider.machine.physicalMemory,
@@ -641,6 +670,7 @@ public final class MonitorCore {
             compressed: reading(.memoryCompressed),
             cached: reading(.memoryCached),
             purgeable: reading(.memoryPurgeable),
+            reusable: reading(.memoryReusable),
             free: reading(.memoryFree),
             swapUsed: reading(.swapUsed),
             pageIns: reading(.pageIns),
@@ -648,7 +678,7 @@ public final class MonitorCore {
             swapIns: reading(.swapIns),
             swapOuts: reading(.swapOuts),
             pressure: reading(.memoryPressure),
-            processes: provider.processMemory
+            processes: processSnapshotIsFresh ? provider.processMemory : ProcessMemorySnapshot()
         )
         let power = PowerSnapshot(
             input: reading(.powerInput),

@@ -2,6 +2,17 @@ import Foundation
 
 /// A low clock or a high sensor temperature alone is not evidence of throttling.
 public enum ThermalPolicy {
+    public static func evaluateGPU(thermalState: Int, hardwareThrottleRecent: Bool, hardwareAvailable: Bool) -> ThrottleStatus {
+        if thermalState >= 3 {
+            return ThrottleStatus(isActive: true, explanation: "macOS reports critical thermal pressure.")
+        }
+        guard hardwareAvailable else { return .unavailable }
+        if thermalState >= 2 && hardwareThrottleRecent {
+            return ThrottleStatus(isActive: true, explanation: "GPU throttle activity and high thermal pressure.")
+        }
+        return ThrottleStatus(isActive: false, explanation: "No GPU thermal throttling detected.")
+    }
+
     public static func evaluate(thermalState: Int, cpuLimitPercent: Double?, hardwareThrottleRecent: Bool) -> ThrottleStatus {
         if thermalState >= 3 {
             return ThrottleStatus(isActive: true, explanation: "macOS reports critical thermal pressure.")

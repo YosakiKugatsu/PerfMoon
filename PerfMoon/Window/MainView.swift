@@ -4,6 +4,7 @@ import SwiftUI
 struct MainActions {
     var togglePause: () -> Void
     var openSettings: (SettingsTab) -> Void
+    var setMemoryProcessListVisible: (Bool) -> Void
 }
 
 /// Time window and refresh trigger shared by every chart on a page.
@@ -71,7 +72,7 @@ struct MainView: View {
         case .gpu:
             GPUPage(model: model, context: context)
         case .memory:
-            MemoryPage(model: model, context: context)
+            MemoryPage(model: model, context: context, setProcessListVisible: actions.setMemoryProcessListVisible)
         case .power:
             PowerPage(model: model, context: context)
         }

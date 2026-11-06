@@ -51,6 +51,7 @@ public final class MonitorEngine {
         core.history.removeAll()
         core.resetState()
         fixtures.prefill(core.history, now: now, temperatureSource: core.temperatureSource)
+        if !core.demands.contains(.coreHistory) { core.discardCoreHistory() }
         primeSources(now: now)
 
         for source in scenario.startsStopped {
@@ -110,6 +111,7 @@ public final class MonitorEngine {
     }
 
     public func setDemand(_ demand: Demand, active: Bool) {
+        guard core.demands.contains(demand) != active else { return }
         core.setDemand(demand, active: active, now: Self.now)
         changed()
     }

@@ -347,13 +347,15 @@ struct Sparkline: View {
     var span: TimeInterval = 60
     var domain: ClosedRange<Double>? = 0...100
     var zeroBased = false
+    /// Samples the caller already read for this key and span; read here when nil.
+    var samples: [HistorySample]?
 
     @Environment(\.historyStore) private var history
     @Environment(\.monitorPaused) private var paused
 
     var body: some View {
         let start = end - span
-        let samples = history?.samples(key, since: start) ?? []
+        let samples = self.samples ?? history?.samples(key, since: start) ?? []
         Canvas { context, size in
             guard !samples.isEmpty else { return }
             let values = samples.map { Double($0.value) }

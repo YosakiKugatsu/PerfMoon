@@ -13,8 +13,7 @@ private enum PanelMetric: String {
     case usage, temperature, power, anePower, frequency
 }
 
-/// Names the span of a card's sparklines in its header row, so a line is never read as a
-/// live value. Each sparkline also speaks the span, so this caption is hidden from VoiceOver.
+/// Other cards still label their history span; CPU/GPU use their status badges.
 private struct HistorySpanLabel: View {
     var body: some View {
         Text("\(Int(PanelSparkline.span)) s history")
@@ -59,8 +58,7 @@ struct CPUPanelSection: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     SectionTitle(title: "CPU")
                     Spacer()
-                    ThrottleBadge(status: cpu.throttle)
-                    HistorySpanLabel()
+                    ThermalStatusBadge(status: cpu.throttle, device: "CPU")
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -341,7 +339,7 @@ struct GPUPanelSection: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     SectionTitle(title: "GPU & ANE")
                     Spacer()
-                    HistorySpanLabel()
+                    ThermalStatusBadge(status: gpu.throttle, device: "GPU")
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     TileRow {
@@ -411,7 +409,7 @@ private enum MemoryMode: CaseIterable {
 
     var hint: String {
         switch self {
-        case .usage: "Shows used, available, and swap memory"
+        case .usage: "Shows where memory goes, including Reusable, Available, and Swap"
         case .history: "Shows memory used over the last 60 seconds"
         case .processes: "Shows the 10 processes using the most memory"
         }
@@ -472,23 +470,33 @@ struct MemoryPanelSection: View {
         .onChange(of: mode == .processes) { _, visible in onProcessListVisibilityChange(visible) }
     }
 
+    /// Used with Available and Swap beside it, then where the memory goes. The two caption
+    /// lines fit within the headline's height, so the legend is the only added row.
     private func memorySummary(_ memory: MemorySnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                ReadingText.bytes(memory.used, font: .pmHeadline)
-                Text("used of \(Format.wholeGigabytes(memory.physical))")
-                    .font(.pmCaption).foregroundStyle(.secondary)
-                Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    ReadingText.bytes(memory.used, font: .pmHeadline)
+                    Text("used of \(Format.wholeGigabytes(memory.physical))")
+                        .font(.pmCaption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 1) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        MemorySwatch(part: .available)
+                        Text("Available").foregroundStyle(.secondary)
+                        ReadingText.bytes(memory.available, font: .pmCaptionNumber)
+                    }
+                    .help(MemoryPart.available.help)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("Swap").foregroundStyle(.secondary)
+                        ReadingText.bytes(memory.swapUsed, font: .pmCaptionNumber)
+                    }
+                }
+                .font(.pmCaption)
+                .fixedSize()
             }
-            Meter(fraction: memory.used.shownValue.map { $0 / memory.physical }, color: Palette.memory, height: 8)
-            HStack {
-                Text("Available").foregroundStyle(.secondary)
-                ReadingText.bytes(memory.available, font: .pmCaptionNumber)
-                Spacer()
-                Text("Swap").foregroundStyle(.secondary)
-                ReadingText.bytes(memory.swapUsed, font: .pmCaptionNumber)
-            }
-            .font(.pmCaption)
+            MemoryCompositionView(memory: memory, layout: .panel)
         }
     }
 

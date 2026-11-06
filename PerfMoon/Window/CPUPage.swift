@@ -380,6 +380,10 @@ private struct CoreInspector: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            Text("Core history is recorded while this window is visible.")
+                .font(.pmCaption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Core \(core.label) details")

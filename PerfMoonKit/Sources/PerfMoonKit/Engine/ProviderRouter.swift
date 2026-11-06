@@ -15,6 +15,7 @@ final class ProviderRouter: MetricProvider {
     var machine: MachineInfo { current.machine }
     var sensors: [SensorInfo] { current.sensors }
     var throttleStatus: ThrottleStatus { current.throttleStatus }
+    var gpuThrottleStatus: ThrottleStatus { current.gpuThrottleStatus }
     var processMemory: ProcessMemorySnapshot { current.processMemory }
     var isLive: Bool { current.isLive }
     func open(_ source: SourceID, at time: TimeInterval) -> OpenResult { current.open(source, at: time) }

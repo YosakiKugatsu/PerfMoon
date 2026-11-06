@@ -30,6 +30,7 @@ public struct GPUSnapshot: Sendable, Equatable {
     public var temperature: MetricReading
     public var power: MetricReading
     public var anePower: MetricReading
+    public var throttle: ThrottleStatus = .unavailable
 }
 
 public struct MemorySnapshot: Sendable, Equatable {
@@ -40,6 +41,7 @@ public struct MemorySnapshot: Sendable, Equatable {
     public var compressed: MetricReading
     public var cached: MetricReading
     public var purgeable: MetricReading
+    public var reusable: MetricReading = .pending(.bytes, source: .memory)
     public var free: MetricReading
     public var swapUsed: MetricReading
     public var pageIns: MetricReading
