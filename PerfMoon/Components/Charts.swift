@@ -15,6 +15,8 @@ struct ChartSeries: Identifiable {
     let name: String
     let color: Color
     var style: Style = .line
+    /// Always dashed, for a series that shares its color with another (P-Core beside S-Core).
+    var dashed = false
     /// Dashed when Differentiate Without Color is on.
     var dashedForAccessibility = false
 
@@ -92,7 +94,7 @@ struct HistoryChart: View {
                     if definition.style != .area {
                         plot.stroke(line, with: .color(definition.color), style: StrokeStyle(
                             lineWidth: contrast == .increased ? 2 : 1.5, lineCap: .round, lineJoin: .round,
-                            dash: definition.dashedForAccessibility && differentiateWithoutColor ? [4, 3] : []))
+                            dash: definition.dashed || (definition.dashedForAccessibility && differentiateWithoutColor) ? [4, 3] : []))
                     }
                 }
             }

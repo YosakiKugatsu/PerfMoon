@@ -252,6 +252,7 @@ public enum MetricKey: Hashable, Sendable {
         case .cpuTotal: .cpuTotal
         case .cpuS: .cpuS
         case .cpuP: .cpuP
+        case .core(let index) where (0..<CoreID.count).contains(index): .coreUsage(CoreID(flatIndex: index))
         case .cpuFrequencyS: .cpuFrequencyS
         case .cpuFrequencyP: .cpuFrequencyP
         case .cpuPower: .cpuPower

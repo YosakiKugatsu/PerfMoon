@@ -53,7 +53,7 @@ struct OverviewPage: View {
                 series: [
                     ChartSeries(key: .cpuTotal, name: "Total", color: Palette.cpu, style: .area),
                     ChartSeries(key: .cpuS, name: "S-Core", color: Palette.sCore),
-                    ChartSeries(key: .cpuP, name: "P-Core", color: Palette.pCore, dashedForAccessibility: true),
+                    ChartSeries(key: .cpuP, name: "P-Core", color: Palette.pCore, dashed: true),
                 ],
                 scale: .percent, range: context.range, end: context.end, revision: context.revision,
                 compact: true, accessibilityName: "CPU usage"

@@ -474,6 +474,19 @@ public final class MonitorCore {
         }
 
         guard appendHistory else { return }
+        // A selected custom sensor may leave other cores unrequested in the
+        // background. Record only fresh mapped reads; never extend a cached
+        // value into a period when that core was not actually sampled.
+        for core in CoreID.all {
+            let key = SeriesKey.coreTemperature(core)
+            if let reading = readings[.coreTemperature(core.flatIndex)],
+               reading.status == .valid, reading.timestamp == now,
+               let value = reading.value, value.isFinite {
+                history.append(key, time: now, value: value, expectedInterval: interval)
+            } else {
+                history.markBreak(key)
+            }
+        }
         for (key, reading) in [(SeriesKey.cpuTemperature, cpu), (.gpuTemperature, gpu)] {
             if reading.status == .valid, reading.timestamp == now, let value = reading.value {
                 history.append(key, time: now, value: value, expectedInterval: interval)

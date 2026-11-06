@@ -62,7 +62,7 @@ and transition to menu bar startup.
 | Surface | How to open | Contents |
 |---|---|---|
 | Menu bar item | Always visible | Two labeled values in one item (CPU and System Power by default); an optional CPU trend appears as a separate item |
-| Panel | Click the menu bar item | CPU and GPU metric switches, fixed-height S/P per-core views, fixed-height two-column memory Top 10, and three switchable power tiles |
+| Panel | Click the menu bar item | Named CPU/GPU metric tiles with a selected state and 60-second charts, fixed-height S/P per-core views, two-column memory Top 10, and three power tiles |
 | Menu | Right-click or Control-click the menu bar item | Pause, Open Window, Settings, About, Quit |
 | Window | Panel ▸ window button, or ⌘O | Overview, CPU, GPU & ANE, Memory, Power; time range 1m / 5m / 15m |
 | Settings | ⌘, | General, Menu Bar, CPU (temperature source), Performance, Data Sources |
@@ -85,17 +85,37 @@ rows; a focused row shows a soft highlight.
 
 ### Panel interactions
 
-- CPU and GPU: click the temperature to swap it with usage and show its history; click Power
-  to select power. GPU Frequency uses the same headline/chart area. Click the displaced Usage
-  item to return. ANE only has power and history.
+- CPU and GPU: each metric keeps its name and current value in a fixed tile. Click a tile
+  to select its 60-second chart; the selected tile is tinted with the chart color. Small
+  charts show their scale. GPU Frequency and ANE Power are selectable tiles too; ANE has
+  power and history only.
 - S-Core / P-Core: click a cluster to replace its summary with all its core readings. Each
-  cluster keeps its original height. The frequency number has its own click target and
-  replaces only that cluster's usage bar with a frequency sparkline.
-- Memory: click to replace the summary with ranks 1–5 on the left and 6–10 on the right;
-  click again to return. The card does not grow.
-- Power: Input, System, and Battery each toggle between their value and a small history.
+  cluster keeps its original height. The frequency chip has a chart icon and a selected
+  state, and replaces only that cluster's usage bar with a frequency sparkline.
+- Memory: choose Usage, History, or Top 10 in the card header. History shows the last 60
+  seconds of memory used, its current value, installed total, and GB scale. Pressure stays
+  a discrete badge. Top 10 shows ranks 1–5 on the left and 6–10 on the right. All modes use
+  the same card height; process scans run only while Top 10 is shown.
+- Power: Input, System, and Battery each toggle between their value and a 60-second history.
+  A selected tile stays labeled and keeps its current value visible above the curve.
 - The panel has a fixed width and no internal scrollbar. The separate CPU settings list
   remains scrollable and searchable.
+
+### CPU details
+
+The CPU page puts overall Usage and Temperature charts side by side. S-Core is a solid
+blue line and P-Core a dashed blue line, matching the legend. CPU Power has its own chart.
+Select any of the 18 core cells to open an inline inspector with both Usage and Temperature
+histories. Only the selected core's two detail charts are rendered. They follow the same
+1 / 5 / 15-minute range as the overall charts, and can be closed from the inspector or by
+selecting the same core again.
+
+Core usage histories reuse the existing per-core CPU samples. Temperature histories record
+only fresh readings from each mapped sensor. They do not add hardware polling: with a custom
+CPU temperature source, a core sensor may first be requested when the CPU page opens, so its
+history can start later than the usage history. Uncollected or missing readings remain gaps.
+The inspector identifies the matched sensor and explains that it reads the area near the core;
+a core without a sensor mapping is shown explicitly instead of receiving an estimated value.
 
 ### Notes on readings
 

@@ -6,30 +6,38 @@ private enum PanelLayout {
     static let clusterHeight: CGFloat = 40
     /// Two rows of six plus a 4 pt gap fill the cluster slot exactly.
     static let compactCellHeight: CGFloat = 18
-    /// Fits "100 °C", "34.6 W", and "1.6 GHz" at the full 22 pt headline size.
-    static let headlineWidth: CGFloat = 74
+    static let sparklineHeight: CGFloat = 24
 }
 
 private enum PanelMetric: String {
     case usage, temperature, power, anePower, frequency
 }
 
-private struct MetricSwitch<Content: View>: View {
-    let help: String
-    let action: () -> Void
-    @ViewBuilder var content: Content
-
+/// Names the span of a card's sparklines in its header row, so a line is never read as a
+/// live value. Each sparkline also speaks the span, so this caption is hidden from VoiceOver.
+private struct HistorySpanLabel: View {
     var body: some View {
-        Button(action: action) { content.contentShape(Rectangle()) }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .help(help)
-            .accessibilityHint(help)
+        Text("\(Int(PanelSparkline.span)) s history")
+            .font(.pmCaption)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .fixedSize()
+            .accessibilityHidden(true)
     }
+}
+
+/// The series a card's sparkline draws for the selected tile.
+private struct PanelChart {
+    let key: SeriesKey
+    let title: String
+    let color: Color
+    let scale: SparklineScale
 }
 
 // MARK: - CPU
 
+/// Usage, temperature, and power are always visible as named tiles. The selected tile
+/// is tinted with its chart color and drives the sparkline below.
 struct CPUPanelSection: View {
     let model: DashboardModel
 
@@ -40,59 +48,75 @@ struct CPUPanelSection: View {
     @AppStorage("panel.frequency.p") private var frequencyP = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sensorNames) private var sensorNames
+    @Environment(\.temperatureUnit) private var unit
 
     var body: some View {
         let cpu = model.cpu
+        let selected = selectedMetric
+        let chart = panelChart(selected)
         Card {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     SectionTitle(title: "CPU")
                     Spacer()
                     ThrottleBadge(status: cpu.throttle)
-                    MetricSwitch(help: metric == .temperature
-                                    ? "Show CPU usage history"
-                                    : "\(temperatureDescription(cpu.temperatureSource)). Click to show its history.",
-                                 action: { metric = metric == .temperature ? .usage : .temperature }) {
-                        if metric == .temperature {
-                            ReadingText.percent(cpu.total, font: .pmCaptionNumber, emphasis: .secondary)
-                        } else {
-                            SourceTemperatureLabel(reading: cpu.temperature, source: cpu.temperatureSource, showsHelp: false)
-                        }
-                    }
+                    HistorySpanLabel()
                 }
 
-                HStack(alignment: .center, spacing: 12) {
-                    primaryValue(cpu)
-                        .lineLimit(1).minimumScaleFactor(0.7)
-                        .frame(width: PanelLayout.headlineWidth, height: 28, alignment: .leading)
-                    Sparkline(key: chartKey, color: chartColor, end: model.time, revision: model.historyRevision,
-                              domain: metric == .usage ? 0...100 : nil, zeroBased: metric == .power)
-                        .frame(height: 24)
-                        .help(metric == .usage ? "CPU usage history" : metric == .temperature ? "CPU temperature history" : "CPU power history")
+                VStack(alignment: .leading, spacing: 4) {
+                    TileRow {
+                        MetricTile(title: "Usage", color: Palette.cpu, isSelected: selected == .usage,
+                                   spokenValue: ReadingText.spoken(cpu.total, Format.spokenPercent),
+                                   action: { metric = .usage }) {
+                            ReadingText.percent(cpu.total, font: .pmTileNumber)
+                        }
+                        MetricTile(title: "Temperature", color: Palette.temperature, isSelected: selected == .temperature,
+                                   spokenValue: ReadingText.spoken(cpu.temperature) { Format.spokenTemperature($0, unit: unit) },
+                                   about: temperatureDescription(cpu.temperatureSource),
+                                   action: { metric = .temperature }) {
+                            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                                // The default CPU Max source has no visible prefix.
+                                if cpu.temperatureSource != .cpuMax {
+                                    Text(cpu.temperatureSource.compactLabel)
+                                        .font(.pmCaption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                TemperatureText(reading: cpu.temperature, font: .pmTileNumber, emphasis: .primary)
+                            }
+                        }
+                        MetricTile(title: "CPU Power", color: Palette.power, isSelected: selected == .power,
+                                   spokenValue: ReadingText.spoken(cpu.power, Format.spokenWatts),
+                                   action: { metric = .power }) {
+                            ReadingText.watts(cpu.power, font: .pmTileNumber)
+                        }
+                    }
+                    PanelSparkline(key: chart.key, title: chart.title, color: chart.color, scale: chart.scale,
+                                   end: model.time, revision: model.historyRevision)
+                        .frame(height: PanelLayout.sparklineHeight)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
                     ClusterDisclosure(cluster: .s, cpu: cpu, model: model, isExpanded: binding($expandedS), showsFrequency: $frequencyS)
                     ClusterDisclosure(cluster: .p, cpu: cpu, model: model, isExpanded: binding($expandedP), showsFrequency: $frequencyP)
                 }
-
-                MetricSwitch(help: metric == .power ? "Show CPU usage history" : "Show CPU power history",
-                             action: { metric = metric == .power ? .usage : .power }) {
-                    ValueRow(label: metric == .power ? "CPU Usage" : "CPU Power") {
-                        if metric == .power { ReadingText.percent(cpu.total) }
-                        else { ReadingText.watts(cpu.power) }
-                    }
-                }
+                .padding(.top, 2)
             }
         }
     }
 
-    @ViewBuilder
-    private func primaryValue(_ cpu: CPUSnapshot) -> some View {
+    /// Older builds stored only CPU metrics here; anything else falls back to usage.
+    private var selectedMetric: PanelMetric {
         switch metric {
-        case .usage: ReadingText.percent(cpu.total, font: .pmHeadline)
-        case .temperature: TemperatureText(reading: cpu.temperature, font: .pmHeadline, emphasis: .primary)
-        case .power, .anePower, .frequency: ReadingText.watts(cpu.power, font: .pmHeadline)
+        case .usage, .temperature, .power: metric
+        case .anePower, .frequency: .usage
+        }
+    }
+
+    private func panelChart(_ metric: PanelMetric) -> PanelChart {
+        switch metric {
+        case .temperature: PanelChart(key: .cpuTemperature, title: "CPU temperature", color: Palette.temperature, scale: .temperature)
+        case .power: PanelChart(key: .cpuPower, title: "CPU power", color: Palette.power, scale: .watts)
+        case .usage, .anePower, .frequency: PanelChart(key: .cpuTotal, title: "CPU usage", color: Palette.cpu, scale: .percent)
         }
     }
 
@@ -101,22 +125,6 @@ struct CPUPanelSection: View {
         case .cpuMax: "Highest CPU temperature"
         case .cpuAverage: "Average CPU temperature"
         case .sensor(let id): sensorNames[id].map { "\($0) (\(id))" } ?? id
-        }
-    }
-
-    private var chartKey: SeriesKey {
-        switch metric {
-        case .usage: .cpuTotal
-        case .temperature: .cpuTemperature
-        case .power, .anePower, .frequency: .cpuPower
-        }
-    }
-
-    private var chartColor: Color {
-        switch metric {
-        case .usage: Palette.cpu
-        case .temperature: Palette.temperature
-        case .power, .anePower, .frequency: Palette.power
         }
     }
 
@@ -168,7 +176,7 @@ private struct ClusterDisclosure: View {
                         .disclosureInteraction(isExpanded: $isExpanded,
                             label: "\(cluster.spokenTitle), \(cluster.count) cores", value: accessibilityValue(usage),
                             hint: "Shows per-core usage")
-                        HStack(spacing: 10) {
+                        HStack(spacing: 8) {
                             Group {
                                 if showsFrequency {
                                     Sparkline(key: cluster == .s ? .cpuFrequencyS : .cpuFrequencyP,
@@ -181,11 +189,9 @@ private struct ClusterDisclosure: View {
                             .frame(maxWidth: .infinity, minHeight: 14, maxHeight: 14)
                             .contentShape(Rectangle())
                             .onTapGesture { isExpanded.toggle() }
-                            MetricSwitch(help: showsFrequency ? "Show \(cluster.title) usage bar" : "Show \(cluster.title) frequency history",
-                                         action: { showsFrequency.toggle() }) {
-                                ReadingText.frequency(cpu.frequency(cluster))
-                                    .frame(width: 84, alignment: .trailing)
-                            }
+                            FrequencyChip(cluster: cluster, reading: cpu.frequency(cluster), isOn: $showsFrequency)
+                                .fixedSize()
+                                .frame(width: 88, alignment: .trailing)
                         }
                     }
                     .padding(.vertical, 2)
@@ -196,7 +202,7 @@ private struct ClusterDisclosure: View {
         .frame(height: PanelLayout.clusterHeight)
         .background {
             // Catches clicks in the gaps between the icon, title, and bar. The frequency
-            // button sits above this layer, so its click never reaches the toggle.
+            // chip sits above this layer, so its click never reaches the toggle.
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture { isExpanded.toggle() }
@@ -215,17 +221,31 @@ private struct ClusterDisclosure: View {
     }
 }
 
-/// Rotating chevron shared by panel disclosures.
-private struct DisclosureChevron: View {
-    let isExpanded: Bool
+/// A cluster's frequency, which also swaps the usage bar for a 60-second frequency line.
+/// The chart symbol marks it as a chart control; the tint shows the line is on.
+private struct FrequencyChip: View {
+    let cluster: CoreCluster
+    let reading: MetricReading
+    @Binding var isOn: Bool
 
     var body: some View {
-        Image(systemName: "chevron.right")
-            .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(.secondary)
-            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-            .frame(width: 10)
-            .accessibilityHidden(true)
+        TileButton(color: Palette.cluster(cluster), isSelected: isOn, cornerRadius: 5, action: { isOn.toggle() }) {
+            HStack(spacing: 3) {
+                Image(systemName: "chart.xyaxis.line")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(isOn ? .primary : .tertiary)
+                ReadingText.frequency(reading, emphasis: isOn ? .primary : .secondary)
+            }
+            .padding(.horizontal, 5)
+            // Stays within the 14 pt bar row, so the 40 pt cluster slot doesn't grow.
+            .padding(.vertical, 0.5)
+        }
+        .help(isOn ? "The line shows \(cluster.title) frequency for the last 60 seconds. Click to show usage."
+                   : "Show \(cluster.title) frequency for the last 60 seconds")
+        .accessibilityLabel("\(cluster.spokenTitle) frequency")
+        .accessibilityValue(ReadingText.spoken(reading, Format.spokenFrequency))
+        .accessibilityHint(isOn ? "Shows the usage bar again" : "Shows frequency history in place of the usage bar")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
 
@@ -306,144 +326,150 @@ private struct PanelCoreCell: View {
 
 // MARK: - GPU & ANE
 
+/// GPU usage, temperature, and power as primary tiles; frequency and ANE power as one-line
+/// tiles. Whichever is selected drives the sparkline below. ANE has power only.
 struct GPUPanelSection: View {
     let model: DashboardModel
     @AppStorage("panel.gpu.metric") private var metric: PanelMetric = .usage
+    @Environment(\.temperatureUnit) private var unit
 
     var body: some View {
         let gpu = model.gpu
+        let chart = panelChart(metric)
         Card {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     SectionTitle(title: "GPU & ANE")
                     Spacer()
-                    MetricSwitch(help: metric == .temperature
-                                    ? "Show GPU usage history"
-                                    : "Highest GPU temperature. Click to show its history.",
-                                 action: { metric = metric == .temperature ? .usage : .temperature }) {
-                        if metric == .temperature {
-                            ReadingText.percent(gpu.usage, font: .pmCaptionNumber, emphasis: .secondary)
-                        } else {
-                            TemperatureText(reading: gpu.temperature)
-                        }
-                    }
+                    HistorySpanLabel()
                 }
-                HStack(alignment: .center, spacing: 12) {
-                    primaryValue(gpu)
-                        .lineLimit(1).minimumScaleFactor(0.7)
-                        .frame(width: PanelLayout.headlineWidth, height: 28, alignment: .leading)
-                    Sparkline(key: chartKey, color: chartColor, end: model.time, revision: model.historyRevision,
-                              domain: metric == .usage ? 0...100 : nil,
-                              zeroBased: metric == .power || metric == .anePower || metric == .frequency)
-                        .frame(height: 24)
-                        .help(metric == .usage ? "GPU usage history" : metric == .temperature ? "GPU temperature history" : metric == .power ? "GPU power history" : metric == .frequency ? "GPU frequency history" : "ANE power history")
-                }
-                VStack(spacing: 6) {
-                    MetricSwitch(help: metric == .frequency ? "Show GPU usage history" : "Show GPU frequency history",
-                                 action: { metric = metric == .frequency ? .usage : .frequency }) {
-                        ValueRow(label: metric == .frequency ? "GPU Usage" : "Frequency") {
-                            if metric == .frequency { ReadingText.percent(gpu.usage) }
-                            else { ReadingText.frequency(gpu.frequency, font: .pmBodyNumber, emphasis: .primary) }
+                VStack(alignment: .leading, spacing: 2) {
+                    TileRow {
+                        MetricTile(title: "Usage", color: Palette.gpu, isSelected: metric == .usage,
+                                   spokenValue: ReadingText.spoken(gpu.usage, Format.spokenPercent),
+                                   action: { metric = .usage }) {
+                            ReadingText.percent(gpu.usage, font: .pmTileNumber)
+                        }
+                        MetricTile(title: "Temperature", color: Palette.temperature, isSelected: metric == .temperature,
+                                   spokenValue: ReadingText.spoken(gpu.temperature) { Format.spokenTemperature($0, unit: unit) },
+                                   about: "Highest GPU temperature",
+                                   action: { metric = .temperature }) {
+                            TemperatureText(reading: gpu.temperature, font: .pmTileNumber, emphasis: .primary)
+                        }
+                        MetricTile(title: "GPU Power", color: Palette.power, isSelected: metric == .power,
+                                   spokenValue: ReadingText.spoken(gpu.power, Format.spokenWatts),
+                                   action: { metric = .power }) {
+                            ReadingText.watts(gpu.power, font: .pmTileNumber)
                         }
                     }
-                    MetricSwitch(help: metric == .power ? "Show GPU usage history" : "Show GPU power history",
-                                 action: { metric = metric == .power ? .usage : .power }) {
-                        ValueRow(label: metric == .power ? "GPU Usage" : "GPU Power") {
-                            if metric == .power { ReadingText.percent(gpu.usage) }
-                            else { ReadingText.watts(gpu.power) }
+                    TileRow {
+                        MetricTile(title: "Frequency", color: Palette.gpu, isSelected: metric == .frequency,
+                                   spokenValue: ReadingText.spoken(gpu.frequency, Format.spokenFrequency),
+                                   compact: true, about: "GPU frequency, averaged over each update",
+                                   action: { metric = .frequency }) {
+                            ReadingText.frequency(gpu.frequency, font: .pmBodyNumber, emphasis: .primary)
+                        }
+                        MetricTile(title: "ANE Power", color: Palette.ane, isSelected: metric == .anePower,
+                                   spokenValue: ReadingText.spoken(gpu.anePower, Format.spokenWatts),
+                                   compact: true, about: "Neural Engine power",
+                                   action: { metric = .anePower }) {
+                            ReadingText.watts(gpu.anePower)
                         }
                     }
-                    Divider()
-                    MetricSwitch(help: metric == .anePower ? "Show GPU usage history" : "Show ANE power history",
-                                 action: { metric = metric == .anePower ? .usage : .anePower }) {
-                        ValueRow(label: metric == .anePower ? "GPU Usage" : "ANE Power", dot: metric == .anePower ? Palette.gpu : Palette.ane) {
-                            if metric == .anePower { ReadingText.percent(gpu.usage) }
-                            else { ReadingText.watts(gpu.anePower) }
-                        }
-                    }
+                    PanelSparkline(key: chart.key, title: chart.title, color: chart.color, scale: chart.scale,
+                                   end: model.time, revision: model.historyRevision)
+                        .frame(height: PanelLayout.sparklineHeight)
+                        .padding(.top, 2)
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private func primaryValue(_ gpu: GPUSnapshot) -> some View {
+    private func panelChart(_ metric: PanelMetric) -> PanelChart {
         switch metric {
-        case .usage: ReadingText.percent(gpu.usage, font: .pmHeadline)
-        case .temperature: TemperatureText(reading: gpu.temperature, font: .pmHeadline, emphasis: .primary)
-        case .power: ReadingText.watts(gpu.power, font: .pmHeadline)
-        case .anePower: ReadingText.watts(gpu.anePower, font: .pmHeadline)
-        case .frequency: ReadingText.frequency(gpu.frequency, font: .pmHeadline, emphasis: .primary)
-        }
-    }
-
-    private var chartKey: SeriesKey {
-        switch metric {
-        case .usage: .gpuUsage
-        case .temperature: .gpuTemperature
-        case .power: .gpuPower
-        case .anePower: .anePower
-        case .frequency: .gpuFrequency
-        }
-    }
-
-    private var chartColor: Color {
-        switch metric {
-        case .usage: Palette.gpu
-        case .temperature: Palette.temperature
-        case .power: Palette.power
-        case .anePower: Palette.ane
-        case .frequency: Palette.gpu
+        case .usage: PanelChart(key: .gpuUsage, title: "GPU usage", color: Palette.gpu, scale: .percent)
+        case .temperature: PanelChart(key: .gpuTemperature, title: "GPU temperature", color: Palette.temperature, scale: .temperature)
+        case .power: PanelChart(key: .gpuPower, title: "GPU power", color: Palette.power, scale: .watts)
+        case .anePower: PanelChart(key: .anePower, title: "ANE power", color: Palette.ane, scale: .watts)
+        case .frequency: PanelChart(key: .gpuFrequency, title: "GPU frequency", color: Palette.gpu, scale: .gigahertz)
         }
     }
 }
 
 // MARK: - Memory
 
+private enum MemoryMode: CaseIterable {
+    case usage, history, processes
+
+    var title: String {
+        switch self {
+        case .usage: "Usage"
+        case .history: "History"
+        case .processes: "Top 10"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .usage: "Shows used, available, and swap memory"
+        case .history: "Shows memory used over the last 60 seconds"
+        case .processes: "Shows the 10 processes using the most memory"
+        }
+    }
+}
+
+/// Three named views in one fixed-height card: the usage summary, a 60-second line of
+/// memory used, and the top 10 processes. The summary always sets the card's height and
+/// the other views draw over it. Processes are collected only while Top 10 is shown.
 struct MemoryPanelSection: View {
     let model: DashboardModel
     /// Tells the controller whether the process list is on screen, so it is collected only then.
     let onProcessListVisibilityChange: (Bool) -> Void
 
+    /// Earlier builds stored only this flag, meaning Top 10. It takes precedence over history.
     @AppStorage("panel.expanded.memory") private var showsProcesses = false
+    @AppStorage("panel.memory.history") private var showsHistory = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var mode: MemoryMode {
+        showsProcesses ? .processes : showsHistory ? .history : .usage
+    }
 
     var body: some View {
         let memory = model.memory
+        let current = mode
         Card {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     SectionTitle(title: "Memory")
-                    DisclosureChevron(isExpanded: showsProcesses)
-                    if showsProcesses {
-                        Text("Top 10").font(.pmCaption).foregroundStyle(.secondary)
+                    HStack(spacing: 2) {
+                        ForEach(MemoryMode.allCases, id: \.self) { option in
+                            ModeChip(title: option.title, isSelected: current == option, hint: option.hint) {
+                                select(option)
+                            }
+                        }
                     }
-                    Spacer()
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Memory view")
+                    Spacer(minLength: 4)
                     PressureBadge(reading: memory.pressure)
                 }
-                // The summary owns the size in both states. The process grid is an
-                // overlay, so changing content cannot resize this card or the popover.
+                // The summary owns the size in every mode. History and processes are
+                // overlays, so switching cannot resize this card or the popover.
                 memorySummary(memory)
-                    .opacity(showsProcesses ? 0 : 1)
-                    .accessibilityHidden(showsProcesses)
+                    .opacity(current == .usage ? 1 : 0)
+                    .accessibilityHidden(current != .usage)
                     .overlay {
-                        if showsProcesses {
-                            PanelProcessColumns(snapshot: memory.processes)
+                        switch current {
+                        case .usage: EmptyView()
+                        case .history: memoryHistory(memory)
+                        case .processes: PanelProcessColumns(snapshot: memory.processes)
                         }
                     }
             }
-            .disclosureInteraction(
-                isExpanded: expansion,
-                label: "Memory",
-                value: showsProcesses ? "Top 10 processes by memory" : summary(memory),
-                hint: showsProcesses ? "Shows memory usage" : "Shows the top 10 processes by memory",
-                preservesChildren: showsProcesses
-            )
-            // Process rows carry their own tooltips, which take precedence over this one.
-            .help(showsProcesses ? "Show memory usage" : "Show the top 10 processes by memory")
         }
-        .onAppear { onProcessListVisibilityChange(showsProcesses) }
-        .onChange(of: showsProcesses) { _, visible in onProcessListVisibilityChange(visible) }
+        .onAppear { onProcessListVisibilityChange(mode == .processes) }
+        .onChange(of: mode == .processes) { _, visible in onProcessListVisibilityChange(visible) }
     }
 
     private func memorySummary(_ memory: MemorySnapshot) -> some View {
@@ -466,39 +492,68 @@ struct MemoryPanelSection: View {
         }
     }
 
-    private var expansion: Binding<Bool> {
-        Binding(
-            get: { showsProcesses },
-            set: { value in
-                if reduceMotion {
-                    showsProcesses = value
-                } else {
-                    withAnimation(.snappy(duration: 0.22)) { showsProcesses = value }
-                }
+    /// Memory used for the last 60 seconds, in the summary's space. The current value and
+    /// installed total stay in view. Pressure is a level, not a quantity on this line, so it
+    /// stays in the header badge.
+    private func memoryHistory(_ memory: MemorySnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text("Used").font(.pmCaption).foregroundStyle(.secondary)
+                ReadingText.bytes(memory.used)
+                Text("of \(Format.wholeGigabytes(memory.physical))")
+                    .font(.pmCaption).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                HistorySpanLabel()
             }
-        )
+            .accessibilityElement(children: .combine)
+            PanelSparkline(key: .memoryUsed, title: "Memory used", color: Palette.memory,
+                           scale: .bytes(total: memory.physical), end: model.time, revision: model.historyRevision)
+                .frame(maxHeight: .infinity)
+        }
     }
 
-    private func summary(_ memory: MemorySnapshot) -> String {
-        var parts: [String] = []
-        if let used = memory.used.shownValue {
-            parts.append("\(Format.spokenBytes(used)) used of \(Format.wholeGigabytes(memory.physical))")
+    private func select(_ option: MemoryMode) {
+        let change = {
+            showsProcesses = option == .processes
+            showsHistory = option == .history
+        }
+        if reduceMotion {
+            change()
         } else {
-            parts.append(ReadingText.placeholderHelp(memory.used))
+            withAnimation(.snappy(duration: 0.22), change)
         }
-        if let level = memory.pressureLevel {
-            parts.append("pressure \(level.title)")
+    }
+}
+
+/// A named view choice in a card header. The selected chip is filled; every chip is a
+/// button, so VoiceOver and Keyboard Navigation can choose it directly.
+private struct ModeChip: View {
+    let title: String
+    let isSelected: Bool
+    let hint: String
+    let action: () -> Void
+
+    var body: some View {
+        TileButton(color: .primary, isSelected: isSelected, cornerRadius: 5, action: action) {
+            Text(title)
+                .font(.pmCaption.weight(isSelected ? .medium : .regular))
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
         }
-        if let swap = memory.swapUsed.shownValue {
-            parts.append("swap \(Format.spokenBytes(swap))")
-        }
-        parts.append(showsProcesses ? "expanded" : "collapsed")
-        return parts.joined(separator: ", ")
+        .help(hint)
+        .accessibilityLabel(title)
+        .accessibilityHint(hint)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
 // MARK: - Power
 
+/// Three independent readings. Each tile switches between its value and its own
+/// 60-second history; the value stays visible in the tile's title row while charted.
 struct PowerPanelSection: View {
     let model: DashboardModel
     @AppStorage("panel.power.inputHistory") private var inputHistory = false
@@ -508,83 +563,103 @@ struct PowerPanelSection: View {
     var body: some View {
         let power = model.power
         Card {
-            VStack(alignment: .leading, spacing: 10) {
-                SectionTitle(title: "Power")
-                HStack(alignment: .top, spacing: 0) {
-                    MetricSwitch(help: inputHistory ? "Show input power value" : "Show input power history",
-                                 action: { inputHistory.toggle() }) {
-                        PowerTile(title: "Input", spokenTitle: "Power Input") {
-                            Group {
-                                if inputHistory {
-                                    powerCurve(.powerInput)
-                                } else if power.hasAdapter == false {
-                                    Text("No Adapter").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
-                                } else {
-                                    ReadingText.watts(power.input, font: .pmTileNumber)
-                                }
-                            }
-                            .frame(height: 24, alignment: .leading)
-                        } detail: { EmptyView() }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    SectionTitle(title: "Power")
+                    Spacer()
+                    // Only while a tile is charted; live values aren't history.
+                    if inputHistory || systemHistory || batteryHistory {
+                        HistorySpanLabel()
                     }
-                    .frame(maxWidth: .infinity)
-                    .accessibilityValue(power.input.shownValue.map(Format.spokenWatts) ?? ReadingText.placeholderHelp(power.input))
-                    ColumnDivider()
-                    MetricSwitch(help: systemHistory ? "Show system power value" : "Show system power history",
-                                 action: { systemHistory.toggle() }) {
-                        PowerTile(title: "System", spokenTitle: "System Power") {
-                            Group {
-                                if systemHistory { powerCurve(.powerSystem) }
-                                else { ReadingText.watts(power.system, font: .pmTileNumber) }
-                            }
-                            .frame(height: 24, alignment: .leading)
-                        } detail: { EmptyView() }
+                }
+                TileRow {
+                    PowerTile(title: "Input", spokenTitle: "Power Input", key: .powerInput, model: model,
+                              spokenValue: power.hasAdapter == false ? "No adapter" : ReadingText.spoken(power.input, Format.spokenWatts),
+                              showsHistory: $inputHistory) { font, compact in
+                        if power.hasAdapter == false {
+                            Text("No Adapter")
+                                .font(compact ? .pmCaption : .system(size: 13, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ReadingText.watts(power.input, font: font)
+                        }
+                    } detail: {
+                        EmptyView()
                     }
-                    .frame(maxWidth: .infinity)
-                    .accessibilityValue(power.system.shownValue.map(Format.spokenWatts) ?? ReadingText.placeholderHelp(power.system))
-                    ColumnDivider()
-                    MetricSwitch(help: batteryHistory ? "Show battery power value" : "Show battery power history",
-                                 action: { batteryHistory.toggle() }) {
-                        PowerTile(title: "Battery", spokenTitle: "Battery Power") {
-                            Group {
-                                if batteryHistory { powerCurve(.powerBattery) }
-                                else { BatteryPowerText(power: power, font: .pmTileNumber) }
-                            }
-                            .frame(height: 24, alignment: .leading)
-                        } detail: { BatteryStatusLabel(power: power) }
+                    PowerTile(title: "System", spokenTitle: "System Power", key: .powerSystem, model: model,
+                              spokenValue: ReadingText.spoken(power.system, Format.spokenWatts),
+                              showsHistory: $systemHistory) { font, _ in
+                        ReadingText.watts(power.system, font: font)
+                    } detail: {
+                        EmptyView()
                     }
-                    .frame(maxWidth: .infinity)
-                    .accessibilityValue(power.battery.shownValue.map(Format.spokenWatts) ?? ReadingText.placeholderHelp(power.battery))
+                    PowerTile(title: "Battery", spokenTitle: "Battery Power", key: .powerBattery, model: model,
+                              spokenValue: batterySpoken(power),
+                              showsHistory: $batteryHistory) { font, _ in
+                        BatteryPowerText(power: power, font: font)
+                    } detail: {
+                        BatteryStatusLabel(power: power)
+                    }
                 }
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, -10)
             }
         }
     }
 
-    private func powerCurve(_ key: SeriesKey) -> some View {
-        Sparkline(key: key, color: Palette.power, end: model.time, revision: model.historyRevision,
-                  domain: nil, zeroBased: true)
-            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+    private func batterySpoken(_ power: PowerSnapshot) -> String {
+        let value = ReadingText.spoken(power.battery) { Format.spokenWatts(abs($0)) }
+        return BatteryStatus(power: power).map { "\($0.title), \(value)" } ?? value
     }
 }
 
 private struct PowerTile<Value: View, Detail: View>: View {
     let title: String
     let spokenTitle: String
-    @ViewBuilder var value: Value
+    let key: SeriesKey
+    let model: DashboardModel
+    let spokenValue: String
+    @Binding var showsHistory: Bool
+    /// The value at a given font; `compact` is true in the title row while charted.
+    @ViewBuilder let value: (Font, Bool) -> Value
     @ViewBuilder var detail: Detail
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.pmCaption)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel(spokenTitle)
-            value
-            detail
+        TileButton(color: Palette.power, isSelected: showsHistory, action: { showsHistory.toggle() }) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(title)
+                        .font(.pmCaption.weight(showsHistory ? .medium : .regular))
+                        .foregroundStyle(showsHistory ? .primary : .secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 2)
+                    if showsHistory {
+                        value(.pmCaptionNumber, true)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+                Group {
+                    if showsHistory {
+                        PanelSparkline(key: key, title: spokenTitle, color: Palette.power, scale: .watts,
+                                       end: model.time, revision: model.historyRevision, showsScale: false)
+                    } else {
+                        value(.pmTileNumber, false)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .leading)
+                detail
+            }
+            .padding(.horizontal, TileLayout.inset)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .accessibilityElement(children: .combine)
+        .help(showsHistory ? "The line shows \(spokenTitle) for the last 60 seconds. Click to show the value."
+                           : "Show \(spokenTitle) for the last 60 seconds")
+        .accessibilityLabel(spokenTitle)
+        .accessibilityValue(showsHistory ? "\(spokenValue), showing the last 60 seconds" : spokenValue)
+        .accessibilityHint(showsHistory ? "Shows the value" : "Shows the last 60 seconds")
+        .accessibilityAddTraits(showsHistory ? .isSelected : [])
     }
 }

@@ -227,6 +227,13 @@ public final class FixtureProvider: MetricProvider {
             add(.cpuTotal, world.total)
             add(.cpuS, world.sMean)
             add(.cpuP, world.pMean)
+            for core in CoreID.all {
+                add(.coreUsage(core), world.cores[core.flatIndex])
+                if let sensor = sensors.first(where: { $0.mappedCore == core }),
+                   !missingSensors.contains(sensor.id) {
+                    add(.coreTemperature(core), world.temperatures[sensor.id])
+                }
+            }
             add(.cpuFrequencyS, world.sFrequency)
             add(.cpuFrequencyP, world.pFrequency)
             add(.cpuPower, world.cpuPower)

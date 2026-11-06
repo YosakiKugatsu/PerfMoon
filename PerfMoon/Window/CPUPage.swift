@@ -8,7 +8,10 @@ struct CPUPage: View {
     @Bindable var settings: AppSettings
 
     @State private var width: CGFloat = 800
+    /// Flat index of the inspected core, or −1. Kept across page switches and window reopening.
+    @AppStorage("window.cpu.selectedCore") private var selectedIndex = -1
     @Environment(\.sensorNames) private var sensorNames
+    @Environment(\.coreSensorKeys) private var coreSensorKeys
 
     var body: some View {
         let cpu = model.cpu
@@ -44,37 +47,26 @@ struct CPUPage: View {
                 }
             }
 
-            ChartCard(title: "Usage", height: 180) {
-                HStack(spacing: 12) {
-                    LegendKey(title: "Total", color: Palette.cpu.opacity(0.35))
-                    LegendKey(title: "S-Core", color: Palette.sCore)
-                    LegendKey(title: "P-Core", color: Palette.pCore, dashed: true)
-                }
-            } chart: {
-                HistoryChart(
-                    series: [
-                        ChartSeries(key: .cpuTotal, name: "Total", color: Palette.cpu, style: .area),
-                        ChartSeries(key: .cpuS, name: "S-Core", color: Palette.sCore),
-                        ChartSeries(key: .cpuP, name: "P-Core", color: Palette.pCore, dashedForAccessibility: true),
-                    ],
-                    scale: .percent, range: context.range, end: context.end, revision: context.revision,
-                    accessibilityName: "CPU usage"
-                )
-            }
-
-            Card {
-                VStack(alignment: .leading, spacing: 12) {
-                    CardHeader(title: "Cores") {
-                        InfoButton(label: "About core temperatures") {
-                            CoreMappingExplanation()
-                        }
-                    }
-                    CoreMatrix(cpu: cpu)
-                }
-            }
-
+            // The two whole-CPU histories side by side, so load and heat read together.
             EqualHeightRow {
-                ChartCard(title: "Temperature") {
+                ChartCard(title: "Usage", height: 160) {
+                    HStack(spacing: 10) {
+                        LegendKey(title: "Total", color: Palette.cpu.opacity(0.35))
+                        LegendKey(title: "S-Core", color: Palette.sCore)
+                        LegendKey(title: "P-Core", color: Palette.pCore, dashed: true)
+                    }
+                } chart: {
+                    HistoryChart(
+                        series: [
+                            ChartSeries(key: .cpuTotal, name: "Total", color: Palette.cpu, style: .area),
+                            ChartSeries(key: .cpuS, name: "S-Core", color: Palette.sCore),
+                            ChartSeries(key: .cpuP, name: "P-Core", color: Palette.pCore, dashed: true),
+                        ],
+                        scale: .percent, range: context.range, end: context.end, revision: context.revision,
+                        accessibilityName: "CPU usage"
+                    )
+                }
+                ChartCard(title: "Temperature", height: 160) {
                     temperatureSourceMenu(cpu.temperatureSource)
                 } chart: {
                     HistoryChart(
@@ -83,17 +75,48 @@ struct CPUPage: View {
                         accessibilityName: "CPU temperature"
                     )
                 }
-                ChartCard(title: "CPU Power") {
-                    ReadingText.watts(cpu.power, font: .pmCaptionNumber, emphasis: .secondary)
-                } chart: {
-                    HistoryChart(
-                        series: [ChartSeries(key: .cpuPower, name: "CPU Power", color: Palette.cpu, style: .lineAndArea)],
-                        scale: .watts(minimumMax: 10), range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "CPU power"
-                    )
+            }
+
+            Card {
+                VStack(alignment: .leading, spacing: 12) {
+                    CardHeader(title: "Cores", subtitle: selectedCore == nil ? "Select a core to see its usage and temperature history" : nil) {
+                        InfoButton(label: "About core temperatures") {
+                            CoreMappingExplanation()
+                        }
+                    }
+                    CoreMatrix(cpu: cpu, selected: selectedCore) { core in
+                        selectedIndex = selectedCore == core ? -1 : core.flatIndex
+                    }
+                    if let core = selectedCore {
+                        Divider()
+                        CoreInspector(
+                            core: core,
+                            usage: cpu.cores[core.flatIndex],
+                            temperature: cpu.coreTemperatures[core.flatIndex],
+                            sensorKey: core.flatIndex < coreSensorKeys.count ? coreSensorKeys[core.flatIndex] : nil,
+                            context: context,
+                            close: { selectedIndex = -1 }
+                        )
+                        .id(CoreInspector.scrollID)
+                    }
                 }
             }
+
+            ChartCard(title: "CPU Power", height: 120) {
+                ReadingText.watts(cpu.power, font: .pmCaptionNumber, emphasis: .secondary)
+            } chart: {
+                HistoryChart(
+                    series: [ChartSeries(key: .cpuPower, name: "CPU Power", color: Palette.cpu, style: .lineAndArea)],
+                    scale: .watts(minimumMax: 10), range: context.range, end: context.end, revision: context.revision,
+                    accessibilityName: "CPU power"
+                )
+            }
         }
+        .modifier(RevealCoreInspector(selectedIndex: selectedIndex))
+    }
+
+    private var selectedCore: CoreID? {
+        (0..<CoreID.count).contains(selectedIndex) ? CoreID(flatIndex: selectedIndex) : nil
     }
 
     private func sourceTitle(_ source: TemperatureSource) -> String {
@@ -129,9 +152,11 @@ struct CPUPage: View {
 
 // MARK: - Core matrix
 
-/// Six columns that adapt between 76 and 140 pt with 8 pt gaps.
+/// Six columns that adapt between 76 and 140 pt with 8 pt gaps. Every cell selects its core.
 struct CoreMatrix: View {
     let cpu: CPUSnapshot
+    let selected: CoreID?
+    let select: (CoreID) -> Void
 
     @State private var width: CGFloat = 600
 
@@ -158,7 +183,9 @@ struct CoreMatrix: View {
                                     core: core,
                                     reading: cpu.cores[core.flatIndex],
                                     temperature: cpu.coreTemperatures[core.flatIndex],
-                                    width: cell
+                                    width: cell,
+                                    isSelected: selected == core,
+                                    select: { select(core) }
                                 )
                             }
                         }
@@ -176,44 +203,60 @@ private struct WindowCoreCell: View {
     let reading: MetricReading
     let temperature: MetricReading?
     let width: CGFloat
+    let isSelected: Bool
+    let select: () -> Void
 
+    @State private var hovering = false
     @Environment(\.monitorPaused) private var paused
     @Environment(\.temperatureUnit) private var unit
 
     var body: some View {
         let fraction = (reading.shownValue ?? 0) / 100
         let color = Palette.cluster(core.cluster)
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(core.label)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 2)
-                ReadingText.percent(reading, font: .system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-            }
-            Spacer(minLength: 0)
-            HStack(spacing: 6) {
-                Meter(fraction: reading.shownValue.map { $0 / 100 }, color: color, height: 4)
-                if let temperature {
-                    TemperatureText(reading: temperature, font: .system(size: 10).monospacedDigit(), emphasis: .tertiary, compact: true)
-                        .fixedSize()
+        Button(action: select) {
+            VStack(spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text(core.label)
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected ? .primary : .secondary)
+                    Spacer(minLength: 2)
+                    ReadingText.percent(reading, font: .system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
+                }
+                Spacer(minLength: 0)
+                HStack(spacing: 6) {
+                    Meter(fraction: reading.shownValue.map { $0 / 100 }, color: color, height: 4)
+                    if let temperature {
+                        TemperatureText(reading: temperature, font: .system(size: 10).monospacedDigit(), emphasis: .tertiary, compact: true)
+                            .fixedSize()
+                    }
                 }
             }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .frame(width: width, height: 56)
-        .background {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.fill.quaternary)
-                .overlay {
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(width: width, height: 56)
+            .background {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(hovering && !isSelected ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.fill.quaternary))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(color.opacity(paused ? 0 : 0.14 * max(0, fraction - 0.4) / 0.6))
+                    }
+            }
+            .overlay {
+                if isSelected {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(color.opacity(paused ? 0 : 0.14 * max(0, fraction - 0.4) / 0.6))
+                        .strokeBorder(Color.accentColor, lineWidth: 2)
                 }
+            }
+            .contentShape(.rect(cornerRadius: 8))
         }
-        .accessibilityElement(children: .ignore)
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(isSelected ? "Hide \(core.label) history" : "Show \(core.label) usage and temperature history")
         .accessibilityLabel(core.label)
         .accessibilityValue(spokenValue)
+        .accessibilityHint(isSelected ? "Hides this core's history" : "Shows usage and temperature history for this core")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var spokenValue: String {
@@ -222,6 +265,139 @@ private struct WindowCoreCell: View {
             parts.append(Format.spokenTemperature(value, unit: unit))
         }
         return parts.joined(separator: ", ")
+    }
+}
+
+// MARK: - Core inspector
+
+/// Scrolls the page just far enough to show the core details when a core is selected.
+/// Closing the details, or opening the page with a remembered selection, doesn't scroll.
+/// The reader wraps the page's scroll view, so only its content moves, never the window.
+private struct RevealCoreInspector: ViewModifier {
+    let selectedIndex: Int
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content.onChange(of: selectedIndex) { _, index in
+                guard (0..<CoreID.count).contains(index) else { return }
+                let animation: Animation? = reduceMotion ? nil : .snappy(duration: 0.3)
+                // One main-actor turn later, so details inserted by this change are laid out.
+                Task { @MainActor in
+                    // No anchor: scroll the minimum amount that shows the whole inspector.
+                    withAnimation(animation) { proxy.scrollTo(CoreInspector.scrollID) }
+                }
+            }
+        }
+    }
+}
+
+/// Usage and temperature history for one core, on the page's time range. Two charts at
+/// most, drawn from the shared history; the matrix cells themselves stay chart-free.
+private struct CoreInspector: View {
+    static let scrollID = "coreInspector"
+
+    let core: CoreID
+    let usage: MetricReading
+    let temperature: MetricReading?
+    /// Sensor matched to this core by the community table, if any.
+    let sensorKey: String?
+    let context: ChartContext
+    let close: () -> Void
+
+    @Environment(\.sensorNames) private var sensorNames
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Core \(core.label)")
+                    .font(.pmCardTitle)
+                    .accessibilityAddTraits(.isHeader)
+                Text(core.cluster.title)
+                    .font(.pmCaption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .help("Close Core Details")
+                .accessibilityLabel("Close \(core.label) details")
+            }
+
+            EqualHeightRow(spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    header("Usage") {
+                        ReadingText.percent(usage)
+                    }
+                    HistoryChart(
+                        series: [ChartSeries(key: .coreUsage(core), name: "\(core.label) Usage", color: Palette.cluster(core.cluster), style: .lineAndArea)],
+                        scale: .percent, range: context.range, end: context.end, revision: context.revision,
+                        accessibilityName: "\(core.label) usage"
+                    )
+                    .frame(height: 120)
+                    Text("Share of time this core was busy over each update.")
+                        .font(.pmCaption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    header("Temperature") {
+                        if sensorKey != nil {
+                            TemperatureText(reading: temperature ?? .pending(.celsius), font: .pmBodyNumber, emphasis: .primary)
+                        }
+                    }
+                    if let sensorKey {
+                        HistoryChart(
+                            series: [ChartSeries(key: .coreTemperature(core), name: "\(core.label) Temperature", color: Palette.temperature)],
+                            scale: .temperature, range: context.range, end: context.end, revision: context.revision,
+                            accessibilityName: "Temperature near \(core.label)"
+                        )
+                        .frame(height: 120)
+                        Text("Sensor \(sensorKey) · reads the area near \(core.label), not the core itself.")
+                            .font(.pmCaption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .help(sensorHelp(sensorKey))
+                    } else {
+                        Text("No sensor is matched to \(core.label).")
+                            .font(.pmCaption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 120)
+                            .background(.fill.quinary, in: .rect(cornerRadius: 8))
+                        Text("Core temperatures come from a community-maintained table that has no entry for this core.")
+                            .font(.pmCaption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Core \(core.label) details")
+    }
+
+    private func header<Value: View>(_ title: String, @ViewBuilder value: () -> Value) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(title)
+                .font(.pmBody.weight(.medium))
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            value()
+        }
+    }
+
+    private func sensorHelp(_ key: String) -> String {
+        let name = sensorNames[key].map { "\($0) (\(key))" } ?? key
+        return "\(name) is matched to \(core.label) by a community-maintained table. Apple doesn't publish this mapping."
     }
 }
 
@@ -248,7 +424,7 @@ private struct CoreMappingExplanation: View {
                     }
                 }
             }
-            Text("The CPU temperature at the top of the page uses the source chosen in Settings and isn't affected by this mapping.")
+            Text("The CPU temperature chart uses the source chosen in Settings and isn't affected by this mapping.")
                 .font(.pmCaption)
                 .foregroundStyle(.secondary)
         }

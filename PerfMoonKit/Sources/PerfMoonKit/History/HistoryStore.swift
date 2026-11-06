@@ -6,6 +6,34 @@ public enum SeriesKey: String, Hashable, Sendable, CaseIterable {
     case memoryUsed, memoryPressure
     case powerInput, powerSystem, powerBattery, batteryState
 
+
+    // Fixed UI order: S0–S5, then P0–P11. These reuse existing hardware samples.
+    case cpuCoreUsage0, cpuCoreUsage1, cpuCoreUsage2, cpuCoreUsage3, cpuCoreUsage4, cpuCoreUsage5
+    case cpuCoreUsage6, cpuCoreUsage7, cpuCoreUsage8, cpuCoreUsage9, cpuCoreUsage10, cpuCoreUsage11
+    case cpuCoreUsage12, cpuCoreUsage13, cpuCoreUsage14, cpuCoreUsage15, cpuCoreUsage16, cpuCoreUsage17
+    case cpuCoreTemperature0, cpuCoreTemperature1, cpuCoreTemperature2, cpuCoreTemperature3, cpuCoreTemperature4, cpuCoreTemperature5
+    case cpuCoreTemperature6, cpuCoreTemperature7, cpuCoreTemperature8, cpuCoreTemperature9, cpuCoreTemperature10, cpuCoreTemperature11
+    case cpuCoreTemperature12, cpuCoreTemperature13, cpuCoreTemperature14, cpuCoreTemperature15, cpuCoreTemperature16, cpuCoreTemperature17
+
+    private static let coreUsageKeys: [Self] = [
+        .cpuCoreUsage0, .cpuCoreUsage1, .cpuCoreUsage2, .cpuCoreUsage3, .cpuCoreUsage4, .cpuCoreUsage5,
+        .cpuCoreUsage6, .cpuCoreUsage7, .cpuCoreUsage8, .cpuCoreUsage9, .cpuCoreUsage10, .cpuCoreUsage11,
+        .cpuCoreUsage12, .cpuCoreUsage13, .cpuCoreUsage14, .cpuCoreUsage15, .cpuCoreUsage16, .cpuCoreUsage17,
+    ]
+    private static let coreTemperatureKeys: [Self] = [
+        .cpuCoreTemperature0, .cpuCoreTemperature1, .cpuCoreTemperature2, .cpuCoreTemperature3, .cpuCoreTemperature4, .cpuCoreTemperature5,
+        .cpuCoreTemperature6, .cpuCoreTemperature7, .cpuCoreTemperature8, .cpuCoreTemperature9, .cpuCoreTemperature10, .cpuCoreTemperature11,
+        .cpuCoreTemperature12, .cpuCoreTemperature13, .cpuCoreTemperature14, .cpuCoreTemperature15, .cpuCoreTemperature16, .cpuCoreTemperature17,
+    ]
+
+    public static func coreUsage(_ core: CoreID) -> Self {
+        coreUsageKeys[core.flatIndex]
+    }
+
+    public static func coreTemperature(_ core: CoreID) -> Self {
+        coreTemperatureKeys[core.flatIndex]
+    }
+
     /// Discrete levels are drawn as steps, never interpolated.
     public var isLevel: Bool {
         self == .memoryPressure || self == .batteryState
@@ -14,6 +42,12 @@ public enum SeriesKey: String, Hashable, Sendable, CaseIterable {
     public var source: SourceID {
         switch self {
         case .cpuTotal, .cpuS, .cpuP: .cpuActivity
+        case .cpuCoreUsage0, .cpuCoreUsage1, .cpuCoreUsage2, .cpuCoreUsage3, .cpuCoreUsage4, .cpuCoreUsage5,
+             .cpuCoreUsage6, .cpuCoreUsage7, .cpuCoreUsage8, .cpuCoreUsage9, .cpuCoreUsage10, .cpuCoreUsage11,
+             .cpuCoreUsage12, .cpuCoreUsage13, .cpuCoreUsage14, .cpuCoreUsage15, .cpuCoreUsage16, .cpuCoreUsage17: .cpuActivity
+        case .cpuCoreTemperature0, .cpuCoreTemperature1, .cpuCoreTemperature2, .cpuCoreTemperature3, .cpuCoreTemperature4, .cpuCoreTemperature5,
+             .cpuCoreTemperature6, .cpuCoreTemperature7, .cpuCoreTemperature8, .cpuCoreTemperature9, .cpuCoreTemperature10, .cpuCoreTemperature11,
+             .cpuCoreTemperature12, .cpuCoreTemperature13, .cpuCoreTemperature14, .cpuCoreTemperature15, .cpuCoreTemperature16, .cpuCoreTemperature17: .sensors
         case .cpuFrequencyS, .cpuFrequencyP: .cpuFrequency
         case .cpuPower, .gpuPower, .anePower: .energy
         case .cpuTemperature, .gpuTemperature, .powerInput, .powerSystem, .powerBattery: .sensors

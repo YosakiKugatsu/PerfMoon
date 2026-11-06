@@ -50,6 +50,12 @@ struct ReadingText: View {
         return ReadingStatus.warmingMessage
     }
 
+    /// VoiceOver text for a reading shown inside a combined control.
+    static func spoken(_ reading: MetricReading, _ format: (Double) -> String) -> String {
+        guard let value = reading.shownValue else { return placeholderHelp(reading) }
+        return format(value) + (reading.isStale ? ", stale" : "")
+    }
+
     static func staleHelp(_ reading: MetricReading) -> String {
         guard let timestamp = reading.timestamp else { return "Stale" }
         return "Last updated \(Format.clockTime(timestamp))"
