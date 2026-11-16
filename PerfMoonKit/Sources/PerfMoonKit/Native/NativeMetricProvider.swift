@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Darwin
 import Foundation
 import IOKit
@@ -136,6 +139,7 @@ public final class NativeMetricProvider: MetricProvider {
             return values.isEmpty ? .failed(.transient) : .values(values)
         case .battery: return sampleBattery()
         case .memory: return sampleMemory()
+        case .disk: return .noNewData // The scheduler runs diskBackgroundSample off the main actor.
         case .memoryPressure:
             var value: Int32 = 0
             var size = MemoryLayout.size(ofValue: value)
@@ -391,5 +395,12 @@ public final class NativeMetricProvider: MetricProvider {
             if let value = IORegistryEntryCreateCFProperty(service, "gpu-core-count" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? NSNumber { return value.intValue }
         }
         return 0
+    }
+}
+
+
+extension NativeMetricProvider {
+    public var diskBackgroundSample: (@Sendable (Double) -> SampleOutcome)? {
+        { StartupVolumes.sample(at: $0) }
     }
 }

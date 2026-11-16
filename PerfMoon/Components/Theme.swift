@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import PerfMoonKit
 import SwiftUI
 
@@ -12,6 +15,8 @@ enum Palette {
     static let temperature = Color.pink
     /// Memory stays neutral so pressure color carries the meaning.
     static let memory = Color.primary.opacity(0.62)
+    /// Storage is neutral too; the bar shows occupancy without implying a warning level.
+    static let disk = Color.primary.opacity(0.62)
 
     static func cluster(_ cluster: CoreCluster) -> Color {
         cluster == .s ? sCore : pCore

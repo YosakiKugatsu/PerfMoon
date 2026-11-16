@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import PerfMoonKit
 import SwiftUI
 
@@ -59,7 +62,7 @@ enum MemoryPart: CaseIterable {
 /// falls back to Used and Available, and the legend shows dashes with their reasons.
 struct MemoryCompositionView: View {
     enum Layout {
-        /// Popover: 8 pt bar and a two-by-two legend. Available is shown by the caller.
+        /// Popover: 8 pt bar and a two-by-two legend. The unfilled track isn't named or spoken.
         case panel
         /// Main window: 12 pt bar, a legend with Available, and a note about Reusable.
         case window
@@ -178,7 +181,9 @@ struct MemoryCompositionView: View {
             let used = ReadingText.spoken(memory.used, Format.spokenBytes)
             return "Breakdown not available. Used \(used) of \(Format.wholeGigabytes(memory.physical))"
         }
-        let parts = MemoryPart.allCases.map { part in
+        // The popover shows only the parts of Used; the main window also names Available.
+        let shown = layout == .window ? MemoryPart.allCases : MemoryPart.allCases.filter { $0 != .available }
+        let parts = shown.map { part in
             guard let bytes = part.bytes(in: composition) else {
                 return "\(part.spokenTitle) \(ReadingText.placeholderHelp(memory.reusable))"
             }

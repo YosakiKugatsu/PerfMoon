@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import PerfMoonKit
 import SwiftUI
 
@@ -29,6 +32,7 @@ struct OverviewPage: View {
                 }
                 memoryCard
             }
+            diskCard
             powerCard
         }
     }
@@ -126,6 +130,38 @@ struct OverviewPage: View {
         }
     }
 
+    /// The startup drive in one row: used of total, then the occupancy bar filling the rest.
+    /// Its storage type and startup volume head the card; other drives are counted there and
+    /// listed on the Disk page.
+    private var diskCard: some View {
+        let drive = model.diskDrives.first
+        let capacity: any StorageCapacity = drive.map { $0 as any StorageCapacity } ?? model.disk
+        let subtitle = drive.map { drive in
+            [drive.storageTitle, drive.leadingVolume?.name].compactMap { $0 }.joined(separator: " · ")
+        } ?? model.disk.name
+        let others = max(0, model.diskDrives.count - 1)
+        let othersText = others == 1 ? "1 more drive" : "\(others) more drives"
+        return OverviewCard(title: "Disk", subtitle: subtitle, page: .disk, navigate: navigate) {
+            if others > 0 {
+                Text(othersText)
+                    .font(.pmCaption)
+                    .foregroundStyle(.tertiary)
+            }
+            DiskAvailableText(capacity: capacity)
+        } content: {
+            HStack(alignment: .center, spacing: 16) {
+                DiskUsageText(capacity: capacity, font: .pmCardNumber, separator: "of")
+                DiskCapacityBar(capacity: capacity)
+            }
+            .helpIfPresent(drive.map { "\($0.menuTitle). \($0.capacityHelp)" })
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(subtitle)
+            .accessibilityValue(capacity.spokenCapacity
+                + (drive?.capacityScopeName.map { ", for \($0)" } ?? "")
+                + (others > 0 ? ", \(othersText) connected" : ""))
+        }
+    }
+
     private var powerCard: some View {
         let power = model.power
         let gpu = model.gpu
@@ -186,6 +222,7 @@ struct EqualHeightRow<Content: View>: View {
 /// A card that opens its page when clicked.
 private struct OverviewCard<Trailing: View, Content: View>: View {
     let title: String
+    var subtitle: String?
     let page: Page
     let navigate: (Page) -> Void
     @ViewBuilder var trailing: Trailing
@@ -196,7 +233,7 @@ private struct OverviewCard<Trailing: View, Content: View>: View {
     var body: some View {
         Card(stretches: true) {
             VStack(alignment: .leading, spacing: 10) {
-                CardHeader(title: title) {
+                CardHeader(title: title, subtitle: subtitle) {
                     trailing
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))

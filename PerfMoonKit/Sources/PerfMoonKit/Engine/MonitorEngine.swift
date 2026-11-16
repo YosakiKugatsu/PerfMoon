@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 /// Owns the one run loop. Every change goes through here so the loop is rescheduled
@@ -27,6 +30,7 @@ public final class MonitorEngine {
         let core = MonitorCore(provider: router)
         self.core = core
         self.snapshot = core.snapshot(now: MonitorEngine.now)
+        core.onDiskSample = { [weak self] in self?.changed() }
     }
 
     public var history: HistoryStore { core.history }
@@ -73,6 +77,12 @@ public final class MonitorEngine {
         core.resetState()
         core.rescheduleAll(at: Self.now)
         changed()
+    }
+
+    public func refreshDiskVolumes() {
+        guard isLive, core.isCollecting, core.intervals[.disk] != nil else { return }
+        core.refresh(.disk, now: Self.now)
+        reschedule()
     }
 
     public func refreshThermalStatus() {

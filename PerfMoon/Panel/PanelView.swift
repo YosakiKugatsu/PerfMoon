@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import PerfMoonKit
 import SwiftUI
 
@@ -31,6 +34,7 @@ struct PanelView: View {
                 CPUPanelSection(model: model)
                 GPUPanelSection(model: model)
                 MemoryPanelSection(model: model, onProcessListVisibilityChange: actions.setProcessListVisible)
+                DiskPanelSection(model: model)
                 PowerPanelSection(model: model)
             }
             .padding(.horizontal, 12)
@@ -53,9 +57,9 @@ private struct PageShortcuts: View {
 
     var body: some View {
         ZStack {
-            ForEach(Array(Page.allCases.enumerated()), id: \.element) { index, page in
+            ForEach(Page.allCases) { page in
                 Button(page.title) { open(page) }
-                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                    .keyboardShortcut(KeyEquivalent(page.shortcutKey), modifiers: .command)
             }
         }
         .opacity(0)

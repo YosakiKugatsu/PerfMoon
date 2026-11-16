@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import AppKit
 import PerfMoonKit
 import SwiftUI
@@ -111,10 +114,14 @@ final class AppModel {
     func showAbout() {
         setActivationPolicy(.regular)
         NSApp.activate()
-        let credits = NSAttributedString(
-            string: engine.isLive ? "Native performance monitoring for Apple Silicon." : "Design preview with simulated data.",
+        let description = engine.isLive ? "Native performance monitoring for Apple silicon." : "Design preview with simulated data."
+        let credits = NSMutableAttributedString(
+            string: "\(description)\nGNU General Public License v3.0 only (GPL-3.0-only).\nProvided without warranty. You may redistribute it under this license.",
             attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]
         )
+        if let license = Bundle.main.url(forResource: "LICENSE", withExtension: nil) {
+            credits.append(NSAttributedString(string: "\nView LICENSE", attributes: [.font: NSFont.systemFont(ofSize: 11), .link: license]))
+        }
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
     }
 
@@ -231,6 +238,11 @@ final class AppModel {
             MainActor.assumeIsolated { self?.engine.refreshThermalStatus() }
         })
         let workspace = NSWorkspace.shared.notificationCenter
+        for event in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification, NSWorkspace.didRenameVolumeNotification] {
+            systemObservers.append(workspace.addObserver(forName: event, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.engine.refreshDiskVolumes() }
+            })
+        }
         systemObservers.append(workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.engine.suspend(.sleep) }
         })

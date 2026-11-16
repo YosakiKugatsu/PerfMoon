@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 /// Deterministic value noise. The same seed, channel, and time always give the same value,

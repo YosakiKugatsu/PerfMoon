@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import PerfMoonKit
 import SwiftUI
 
@@ -253,6 +256,246 @@ private struct MemoryExplanation: View {
             Text("Swap Used is memory written to disk. Pressure is the level macOS reports: Normal, Warning, or Critical.")
         }
         .foregroundStyle(.secondary)
+    }
+}
+
+// MARK: - Disk
+
+/// One card per physical drive, startup drive first: what kind of storage it is, its media
+/// and BSD names, its capacity, then each volume with its device, file system, and own used
+/// space. Shared APFS space is never split into per-volume percentages or added together.
+/// No chart or history: capacity changes slowly and isn't activity.
+struct DiskPage: View {
+    let model: DashboardModel
+
+    @State private var width: CGFloat = 800
+
+    var body: some View {
+        let drives = model.diskDrives
+        PageScroll(width: $width) {
+            if drives.isEmpty {
+                // Before the first reading, or if none succeeds.
+                Card(padding: 14) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        CardHeader(title: model.disk.name)
+                        DiskUsageText(capacity: model.disk, font: .pmStatNumber, separator: "used of", captionFont: .pmBody)
+                        DiskCapacityBar(capacity: model.disk, height: 10)
+                        ReasonCaption(reading: model.disk.available)
+                    }
+                }
+            } else {
+                ForEach(drives) { DiskDriveCard(drive: $0) }
+            }
+
+            Card {
+                VStack(alignment: .leading, spacing: 8) {
+                    CardHeader(title: "About Disk Capacity")
+                    Group {
+                        Text("For the startup disk, Used and Available are what macOS reports for the startup volume, as in System Settings: space macOS can reclaim counts as available. Allocated is all space APFS has allocated there, and Reclaimable is the part macOS reports it can free.")
+                        Text("Each volume's Used is the space allocated to it, so it can include reclaimable space and volumes can add up to more than the drive's Used. Volumes in one APFS container share its free space, so they show no separate total or percentage and aren't added together.")
+                        Text("When macOS gives no estimate for a drive, it shows the space allocated on that drive's file systems.")
+                        Text("This is capacity, not read or write activity.")
+                    }
+                    .font(.pmBody)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
+/// A physical drive: identity and available space, its capacity, then its volumes.
+private struct DiskDriveCard: View {
+    let drive: DiskDriveSnapshot
+
+    var body: some View {
+        Card(padding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: drive.symbol)
+                        .font(.system(size: 20))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(drive.storageTitle)
+                            .font(.pmCardTitle)
+                            .accessibilityAddTraits(.isHeader)
+                        HStack(spacing: 6) {
+                            if drive.name != drive.storageTitle {
+                                Text(drive.name)
+                            }
+                            Text(drive.id).monospaced()
+                        }
+                        .font(.pmCaption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    }
+                    .accessibilityElement(children: .combine)
+                    Spacer(minLength: 12)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Available").font(.pmCaption).foregroundStyle(.secondary)
+                        ReadingText.storage(drive.available, font: .pmStatNumber)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .center, spacing: 16) {
+                        DiskUsageText(capacity: drive, font: .pmStatNumber, separator: "used of", captionFont: .pmBody)
+                        DiskCapacityBar(capacity: drive, height: 10)
+                    }
+                    .help(drive.capacityHelp)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(drive.storageTitle) capacity")
+                    .accessibilityValue([drive.spokenCapacity, drive.spokenScope].filter { !$0.isEmpty }.joined(separator: ", "))
+                    if drive.capacityScopeName != nil || drive.allocated != nil || drive.reclaimable != nil {
+                        // One line when it fits, otherwise stacked.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .firstTextBaseline, spacing: 16) { scopeDetails }
+                            VStack(alignment: .leading, spacing: 3) { scopeDetails }
+                        }
+                        .font(.pmCaption)
+                        .accessibilityHidden(true)
+                    }
+                }
+                ReasonCaption(reading: drive.used)
+                DiskVolumeTable(volumes: drive.volumes)
+            }
+        }
+    }
+
+    /// Whose Used and Available these are, then the startup container's allocated and
+    /// reclaimable space. Each part appears only when macOS reports it.
+    @ViewBuilder
+    private var scopeDetails: some View {
+        if let scope = drive.capacityScopeName {
+            Text("Used and Available for \(scope)")
+                .foregroundStyle(.secondary)
+                .help(drive.capacityHelp)
+        }
+        if let allocated = drive.allocated {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Allocated").foregroundStyle(.secondary)
+                ReadingText.storage(allocated, font: .pmCaptionNumber)
+            }
+            .help("All space APFS has allocated in this container, including space macOS can reclaim.")
+        }
+        if let reclaimable = drive.reclaimable {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Reclaimable").foregroundStyle(.secondary)
+                ReadingText.storage(reclaimable, font: .pmCaptionNumber)
+            }
+            .help("Allocated space macOS reports it can free when needed, such as purgeable files, caches, and local snapshots.")
+        }
+    }
+}
+
+/// Volumes in aligned columns. A volume with its own capacity shows used of total and a
+/// small bar; a volume sharing its container's space shows only what it uses.
+private struct DiskVolumeTable: View {
+    let volumes: [DiskSnapshot]
+
+    var body: some View {
+        if volumes.isEmpty {
+            Text("No mounted volumes")
+                .font(.pmCaption)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                VolumeColumns {
+                    Text("Volume")
+                } device: {
+                    Text("Device")
+                } fileSystem: {
+                    Text("File System")
+                } used: {
+                    Text("Used")
+                }
+                .font(.pmCaption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 5)
+                .accessibilityHidden(true)
+                ForEach(volumes) { volume in
+                    Divider()
+                    DiskVolumeRow(volume: volume)
+                }
+                if volumes.contains(where: \.sharesCapacity) {
+                    Text("Volumes in an APFS container share its free space. Used shows each one's own data.")
+                        .font(.pmCaption)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                }
+            }
+        }
+    }
+}
+
+/// Shared column widths, so the header and every row line up.
+private struct VolumeColumns<Name: View, Device: View, FileSystem: View, Used: View>: View {
+    @ViewBuilder var name: Name
+    @ViewBuilder var device: Device
+    @ViewBuilder var fileSystem: FileSystem
+    @ViewBuilder var used: Used
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            name.frame(maxWidth: .infinity, alignment: .leading)
+            device.frame(width: 92, alignment: .leading)
+            fileSystem.frame(width: 76, alignment: .leading)
+            used.frame(width: 140, alignment: .trailing)
+        }
+    }
+}
+
+private struct DiskVolumeRow: View {
+    let volume: DiskSnapshot
+
+    var body: some View {
+        VolumeColumns {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(volume.name)
+                        .font(.pmBody)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if volume.isStartup {
+                        DiskContextTag(title: "Startup")
+                    }
+                }
+                if !volume.mountPath.isEmpty {
+                    Text(volume.mountPath)
+                        .font(.system(size: 11).monospaced())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        } device: {
+            Text(volume.deviceIdentifier ?? Format.placeholder)
+                .font(.system(size: 12).monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } fileSystem: {
+            Text(volume.fileSystem.isEmpty ? Format.placeholder : volume.fileSystem)
+                .font(.pmBody)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } used: {
+            VStack(alignment: .trailing, spacing: 3) {
+                VolumeUsedText(volume: volume, font: .pmBodyNumber, separator: "of")
+                    .font(.pmBody)
+                if !volume.sharesCapacity, volume.usedFraction != nil {
+                    DiskCapacityBar(capacity: volume, height: 4)
+                        .frame(width: 80)
+                }
+            }
+        }
+        .padding(.vertical, 7)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(volume.isStartup ? "\(volume.name), startup volume" : volume.name)
+        .accessibilityValue(volume.spokenVolume)
     }
 }
 

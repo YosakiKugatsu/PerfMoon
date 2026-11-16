@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 /// Fixed storage for Mach's 18 × 4 counters. A sample allocates only its output

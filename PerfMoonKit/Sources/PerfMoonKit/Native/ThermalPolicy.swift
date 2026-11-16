@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 /// A low clock or a high sensor temperature alone is not evidence of throttling.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 /// Disjoint physical-capacity segments. Reusable is split out of App, never

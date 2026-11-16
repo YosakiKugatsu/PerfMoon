@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 public enum SourceFailure: Sendable, Equatable {
@@ -37,6 +40,8 @@ public struct SampleRequest: Sendable, Equatable {
 public enum SampleOutcome: Sendable, Equatable {
     /// Missing sensor keys mean the sensor is no longer reported.
     case values([MetricKey: Double])
+    /// A full replacement for the mounted volume list, including removals.
+    case diskDrives([DiskDriveSnapshot])
     case measured([MetricKey: Double], window: TimeInterval)
     /// The source has not produced a new value since the last sample.
     case noNewData
@@ -52,6 +57,7 @@ public protocol MetricProvider: AnyObject {
     var gpuThrottleStatus: ThrottleStatus { get }
     var processMemory: ProcessMemorySnapshot { get }
     var isLive: Bool { get }
+    var diskBackgroundSample: (@Sendable (Double) -> SampleOutcome)? { get }
 
     /// Subscribes to a source and captures a baseline for differenced metrics.
     func open(_ source: SourceID, at time: TimeInterval) -> OpenResult
@@ -67,4 +73,5 @@ public extension MetricProvider {
     var gpuThrottleStatus: ThrottleStatus { .unavailable }
     var processMemory: ProcessMemorySnapshot { ProcessMemorySnapshot() }
     var isLive: Bool { false }
+    var diskBackgroundSample: (@Sendable (Double) -> SampleOutcome)? { nil }
 }

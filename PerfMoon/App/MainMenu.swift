@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import AppKit
 import PerfMoonKit
 
@@ -47,8 +50,8 @@ enum MainMenu {
         let viewDelegate = ViewMenuDelegate(app: app)
         view.delegate = viewDelegate
         objc_setAssociatedObject(view, &ViewMenuDelegate.key, viewDelegate, .OBJC_ASSOCIATION_RETAIN)
-        for (index, page) in Page.allCases.enumerated() {
-            view.addItem(ClosureMenuItem(title: page.title, key: String(index + 1)) { [unowned app] in
+        for page in Page.allCases {
+            view.addItem(ClosureMenuItem(title: page.title, key: String(page.shortcutKey)) { [unowned app] in
                 app.openMainWindow(page: page)
             })
         }

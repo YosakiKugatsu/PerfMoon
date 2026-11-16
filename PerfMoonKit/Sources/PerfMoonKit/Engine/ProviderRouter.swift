@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 /// Keeps the UI contract stable while Debug review swaps live data for fixtures.
@@ -18,6 +21,7 @@ final class ProviderRouter: MetricProvider {
     var gpuThrottleStatus: ThrottleStatus { current.gpuThrottleStatus }
     var processMemory: ProcessMemorySnapshot { current.processMemory }
     var isLive: Bool { current.isLive }
+    var diskBackgroundSample: (@Sendable (Double) -> SampleOutcome)? { current.diskBackgroundSample }
     func open(_ source: SourceID, at time: TimeInterval) -> OpenResult { current.open(source, at: time) }
     func close(_ source: SourceID) { current.close(source) }
     func rebaseline(_ source: SourceID, at time: TimeInterval) { current.rebaseline(source, at: time) }

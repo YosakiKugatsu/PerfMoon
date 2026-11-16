@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 import PerfMoonKit
 
@@ -51,6 +54,25 @@ struct PerfMoonProbe {
             put("memoryUsed", s.memory.used); put("memoryPressure", s.memory.pressure)
             put("memoryApp", s.memory.app); put("memoryReusable", s.memory.reusable)
             put("memoryWired", s.memory.wired); put("memoryCompressed", s.memory.compressed)
+            metrics["diskTotalBytes"] = s.disk.totalBytes
+            put("diskUsedBytes", s.disk.used); put("diskAvailableBytes", s.disk.available)
+            if !s.diskVolumes.isEmpty {
+                metrics["diskVolumes"] = s.diskVolumes.map {
+                    ["name": $0.name, "path": $0.mountPath, "device": $0.deviceIdentifier as Any? ?? NSNull(),
+                     "filesystem": $0.fileSystem, "sharedCapacity": $0.sharesCapacity,
+                     "used": $0.used.shownValue as Any? ?? NSNull()]
+                }
+            }
+            if !s.diskDrives.isEmpty {
+                metrics["diskDrives"] = s.diskDrives.map {
+                    ["id": $0.id, "name": $0.name, "volumes": $0.volumes.map(\.id),
+                     "total": $0.totalBytes as Any? ?? NSNull(), "used": $0.used.shownValue as Any? ?? NSNull(),
+                     "available": $0.available.shownValue as Any? ?? NSNull(),
+                     "scope": $0.capacityScopeName as Any? ?? NSNull(),
+                     "allocated": $0.allocated?.shownValue as Any? ?? NSNull(),
+                     "reclaimable": $0.reclaimable?.shownValue as Any? ?? NSNull()]
+                }
+            }
             put("inputW", s.power.input); put("systemW", s.power.system); put("batteryW", s.power.battery)
             put("batteryState", s.power.batteryState); put("adapterConnected", s.power.adapterConnected)
             metrics["type"] = "sample"; metrics["epoch"] = Date().timeIntervalSince1970

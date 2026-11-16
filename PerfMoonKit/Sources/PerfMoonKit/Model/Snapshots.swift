@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 public struct CPUSnapshot: Sendable, Equatable {
@@ -127,6 +130,9 @@ public struct MonitorSnapshot: Sendable, Equatable {
     public var cpu: CPUSnapshot
     public var gpu: GPUSnapshot
     public var memory: MemorySnapshot
+    public var disk: DiskSnapshot
+    public var diskDrives: [DiskDriveSnapshot]
+    public var diskVolumes: [DiskSnapshot] { diskDrives.flatMap(\.volumes) }
     public var power: PowerSnapshot
     public var prompt: PanelPrompt?
     public var historyRevision: Int

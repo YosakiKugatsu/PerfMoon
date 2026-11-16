@@ -8,10 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		A1F0000000000000000000B1 /* PerfMoonKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1F0000000000000000000C2 /* PerfMoonKit */; };
+		A1F0000000000000000000B2 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = A1F000000000000000000010 /* LICENSE */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A1F000000000000000000001 /* PerfMoon.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PerfMoon.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1F000000000000000000010 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -38,6 +40,7 @@
 			isa = PBXGroup;
 			children = (
 				A1F000000000000000000002 /* PerfMoon */,
+				A1F000000000000000000010 /* LICENSE */,
 				A1F000000000000000000005 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -118,6 +121,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1F0000000000000000000B2 /* LICENSE in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -193,12 +197,12 @@
 				INFOPLIST_KEY_CFBundleDisplayName = PerfMoon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Native performance monitoring.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 YosakiKugatsu";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 0.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = local.perfmoon;
 				PRODUCT_MODULE_NAME = PerfMoon;
 				PRODUCT_NAME = PerfMoon;
@@ -223,12 +227,12 @@
 				INFOPLIST_KEY_CFBundleDisplayName = PerfMoon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Native performance monitoring.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 YosakiKugatsu";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 0.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = local.perfmoon;
 				PRODUCT_MODULE_NAME = PerfMoon;
 				PRODUCT_NAME = PerfMoon;

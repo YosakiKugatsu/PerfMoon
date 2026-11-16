@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 /// A collection source. Failures are isolated per source.
@@ -10,6 +13,7 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
     case battery
     case memory
     case memoryPressure
+    case disk
     case thermal
     case processMemory
 
@@ -25,6 +29,7 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
         case .battery: "Battery"
         case .memory: "Memory"
         case .memoryPressure: "Memory Pressure"
+        case .disk: "Local Disk Volumes"
         case .thermal: "Thermal Limits"
         case .processMemory: "Process Memory"
         }
@@ -40,6 +45,7 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
         case .battery: "AppleSmartBattery"
         case .memory: "Mach VM"
         case .memoryPressure: "Kernel"
+        case .disk: "Filesystem (statfs)"
         case .thermal: "Power Management"
         case .processMemory: "libproc"
         }
@@ -49,7 +55,7 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
     public var isDifferenced: Bool {
         switch self {
         case .cpuActivity, .cpuFrequency, .energy, .gpuActivity, .memory: true
-        case .sensors, .battery, .memoryPressure, .thermal, .processMemory: false
+        case .sensors, .battery, .memoryPressure, .disk, .thermal, .processMemory: false
         }
     }
 
@@ -98,6 +104,11 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
             ]
         case .memoryPressure:
             [MetricDescriptor("Pressure Level", quality: .observed, window: .instant)]
+        case .disk:
+            [
+                MetricDescriptor("Total and Available Capacity", quality: .observed, window: .instant),
+                MetricDescriptor("Used Capacity", quality: .derived, window: .instant),
+            ]
         case .thermal:
             [MetricDescriptor("Thermal Throttling", quality: .observed, window: .instant)]
         case .processMemory:
@@ -145,6 +156,7 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
     case battery
     case memory
     case memoryPressure
+    case disk
     case sensorCatalog
     case selfUsage
     case thermal
@@ -160,6 +172,7 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
         case .battery: .battery
         case .memory: .memory
         case .memoryPressure: .memoryPressure
+        case .disk: .disk
         case .selfUsage: nil
         case .thermal: .thermal
         case .processMemory: .processMemory
@@ -169,7 +182,7 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
     /// Jobs that refresh at the visible rate when something on screen needs them.
     public var isPrimary: Bool {
         switch self {
-        case .temperatures, .sensorCatalog, .selfUsage, .thermal, .processMemory: false
+        case .temperatures, .sensorCatalog, .selfUsage, .thermal, .processMemory, .disk: false
         default: true
         }
     }
@@ -189,7 +202,7 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
                 .memoryPurgeable, .memoryReusable, .memoryFree, .swapUsed, .pageIns, .pageOuts, .swapIns, .swapOuts,
             ]
         case .memoryPressure: [.memoryPressure]
-        case .temperatures, .sensorCatalog, .selfUsage, .thermal, .processMemory: []
+        case .temperatures, .sensorCatalog, .selfUsage, .thermal, .processMemory, .disk: []
         }
     }
 }
@@ -287,7 +300,7 @@ public enum Demand: Hashable, Sendable {
 }
 
 public enum Page: String, CaseIterable, Sendable, Identifiable, Hashable {
-    case overview, cpu, gpu, memory, power
+    case overview, cpu, gpu, memory, disk, power
 
     public var id: String { rawValue }
 
@@ -297,6 +310,7 @@ public enum Page: String, CaseIterable, Sendable, Identifiable, Hashable {
         case .cpu: "CPU"
         case .gpu: "GPU & ANE"
         case .memory: "Memory"
+        case .disk: "Disk"
         case .power: "Power"
         }
     }
@@ -308,6 +322,7 @@ public enum Page: String, CaseIterable, Sendable, Identifiable, Hashable {
         case .cpu: [.cpuActivity, .cpuFrequency, .energy]
         case .gpu: [.gpuActivity, .energy]
         case .memory: [.memory, .memoryPressure]
+        case .disk: []
         case .power: [.powerSensors, .battery, .energy]
         }
     }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 public struct SourceRuntime: Sendable, Equatable {
@@ -71,6 +74,11 @@ public final class MonitorCore {
     private var mappedSensorIDs: [CoreID: String] = [:]
     private var lastTemperatureRequest: [String] = []
     private var processSnapshotIsFresh = false
+    private var diskDrives: [DiskDriveSnapshot] = []
+    private var diskSampleInFlight = false
+    private var diskGeneration = 0
+    private var diskRefreshPending = false
+    var onDiskSample: (@MainActor () -> Void)?
 
     public static let dueTolerance: TimeInterval = 0.005
     public static let staleCycles: Double = 3
@@ -105,6 +113,8 @@ public final class MonitorCore {
             if let core = sensor.mappedCore { mappedSensorIDs[core] = sensor.id }
         }
         readings = [:]
+        diskDrives = []
+        invalidateDiskSample()
         catalog = [:]
         selfUsage = .pending
         selfSampler.reset()
@@ -208,6 +218,7 @@ public final class MonitorCore {
 
     private func transition(wasCollecting: Bool, now: TimeInterval) {
         if wasCollecting, !isCollecting {
+            invalidateDiskSample()
             history.markBreakAll()
             historyRevision += 1
         } else if !wasCollecting, isCollecting {
@@ -270,6 +281,12 @@ public final class MonitorCore {
         }
         for job in intervals.keys where planned[job] == nil {
             nextDue[job] = nil
+        }
+        if intervals[.disk] != nil && planned[.disk] == nil {
+            invalidateDiskSample()
+            provider.close(.disk)
+            sources[.disk]?.phase = .idle
+            sources[.disk]?.lastUpdated = nil
         }
         intervals = planned
 
@@ -353,9 +370,16 @@ public final class MonitorCore {
             break
         }
 
+        if job == .disk, let collect = provider.diskBackgroundSample {
+            startDiskSample(collect, at: now)
+            return
+        }
         sampleCount += 1
         let outcome = provider.sample(job, request: request, at: now)
         switch outcome {
+        case .diskDrives(let drives):
+            sources[source]?.lastUpdated = now
+            diskDrives = drives
         case .failed(let failure):
             handleFailure(source, failure: failure, now: now)
         case .noNewData:
@@ -368,6 +392,39 @@ public final class MonitorCore {
             sources[source]?.lastUpdated = now
             if job == .processMemory { processSnapshotIsFresh = true }
             apply(values, job: job, request: request, interval: interval, now: now, sampleWindow: window)
+        }
+    }
+
+    private func invalidateDiskSample() {
+        diskGeneration += 1
+        diskRefreshPending = false
+    }
+
+    private func startDiskSample(_ collect: @escaping @Sendable (Double) -> SampleOutcome, at now: Double) {
+        guard !diskSampleInFlight else { diskRefreshPending = true; return }
+        sampleCount += 1
+        diskSampleInFlight = true
+        let generation = diskGeneration
+        Task { [weak self] in
+            let outcome = await Task.detached(priority: .utility) { collect(now) }.value
+            guard let self else { return }
+            diskSampleInFlight = false
+            guard isCollecting, intervals[.disk] != nil, provider.diskBackgroundSample != nil else { return }
+            let finished = Date().timeIntervalSinceReferenceDate
+            if generation == diskGeneration {
+                switch outcome {
+                case .diskDrives(let drives):
+                    diskDrives = drives
+                    sources[.disk]?.lastUpdated = now
+                case .failed(let failure): handleFailure(.disk, failure: failure, now: finished)
+                default: break
+                }
+            }
+            if diskRefreshPending {
+                diskRefreshPending = false
+                refresh(.disk, now: finished)
+            }
+            onDiskSample?()
         }
     }
 
@@ -582,6 +639,7 @@ public final class MonitorCore {
     }
 
     private func markUnavailable(_ source: SourceID, reason: UnavailableReason) {
+        if source == .disk { diskDrives.removeAll() }
         for job in source.jobs {
             for key in job.keys {
                 readings[key, default: .pending(key.unit, source: source, quality: key.quality)].status = .unavailable(reason)
@@ -693,6 +751,8 @@ public final class MonitorCore {
             cpu: cpu,
             gpu: gpu,
             memory: memory,
+            disk: diskDrives.lazy.flatMap(\.volumes).first ?? .placeholder(status: sources[.disk]?.reason.map(ReadingStatus.unavailable) ?? .warming),
+            diskDrives: diskDrives,
             power: power,
             prompt: prompt(),
             historyRevision: historyRevision

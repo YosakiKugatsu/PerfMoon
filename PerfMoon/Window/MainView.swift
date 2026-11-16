@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import PerfMoonKit
 import SwiftUI
 
@@ -73,6 +76,8 @@ struct MainView: View {
             GPUPage(model: model, context: context)
         case .memory:
             MemoryPage(model: model, context: context, setProcessListVisible: actions.setMemoryProcessListVisible)
+        case .disk:
+            DiskPage(model: model)
         case .power:
             PowerPage(model: model, context: context)
         }
@@ -109,7 +114,21 @@ extension Page {
         case .cpu: "cpu"
         case .gpu: "square.stack.3d.up"
         case .memory: "memorychip"
+        case .disk: "internaldrive"
         case .power: "bolt"
+        }
+    }
+
+    /// ⌘1–⌘6 for the View menu and the panel. Disk was added after Power had ⌘5, so it
+    /// takes ⌘6 while appearing before Power.
+    var shortcutKey: Character {
+        switch self {
+        case .overview: "1"
+        case .cpu: "2"
+        case .gpu: "3"
+        case .memory: "4"
+        case .power: "5"
+        case .disk: "6"
         }
     }
 }

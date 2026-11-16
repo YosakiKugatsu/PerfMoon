@@ -1,4 +1,7 @@
 #!/bin/zsh
+# SPDX-FileCopyrightText: 2026 YosakiKugatsu
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Builds PerfMoon with Xcode and copies the app to build/.
 # Usage: scripts/build.sh [debug|release]   (default: release)
 set -euo pipefail

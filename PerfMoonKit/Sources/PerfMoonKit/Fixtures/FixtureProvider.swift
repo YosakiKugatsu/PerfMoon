@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 /// Simulated data for the UI prototype. Contains no hardware access of any kind.
@@ -133,6 +136,19 @@ public final class FixtureProvider: MetricProvider {
                 ProcessMemoryEntry(pid: Int32(2000 + $0.offset), name: $0.element, memoryBytes: Double(12_000_000_000 / ($0.offset + 1)))
             }, status: .valid, timestamp: time)
         }
+        if job == .disk {
+            let boot = DiskSnapshot(id: "fixture-startup", name: "Macintosh HD", mountPath: "/", deviceIdentifier: "disk3s1s1",
+                                    isInternal: true, totalBytes: 1_000_000_000_000, availableBytes: 620_000_000_000, at: time,
+                                    fileSystem: "APFS", sharesCapacity: true, individualUsed: 380_000_000_000)
+            let external = DiskSnapshot(id: "fixture-external", name: "Archive SSD", mountPath: "/Volumes/Archive SSD", deviceIdentifier: "disk5s1",
+                                        isInternal: false, totalBytes: 2_000_000_000_000, availableBytes: 850_000_000_000, at: time, fileSystem: "exFAT")
+            return .diskDrives([
+                DiskDriveSnapshot(id: "disk0", name: "Internal SSD", isInternal: true, volumes: [boot],
+                                  totalBytes: boot.totalBytes, availableBytes: boot.available.shownValue, at: time),
+                DiskDriveSnapshot(id: "disk5", name: "External SSD", isInternal: false, volumes: [external],
+                                  totalBytes: external.totalBytes, availableBytes: external.available.shownValue, at: time),
+            ])
+        }
         return .values(values(for: job, request: request, world: world(at: time)))
     }
 
@@ -178,7 +194,7 @@ public final class FixtureProvider: MetricProvider {
             for id in request.sensorIDs where !missingSensors.contains(id) {
                 if let value = world.temperatures[id] { values[.sensor(id)] = value }
             }
-        case .selfUsage, .thermal, .processMemory:
+        case .selfUsage, .thermal, .processMemory, .disk:
             break
         }
         for key in request.warmingKeys { values[key] = nil }

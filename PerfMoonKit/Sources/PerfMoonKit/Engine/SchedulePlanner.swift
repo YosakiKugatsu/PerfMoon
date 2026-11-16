@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 
 /// Turns what is on screen into one effective interval per job.
@@ -12,6 +15,7 @@ public enum SchedulePlanner {
     public static let temperatureFloor: TimeInterval = 2
     public static let catalogFloor: TimeInterval = 5
     public static let selfUsageInterval: TimeInterval = 10
+    public static let diskFloor: TimeInterval = 30
 
     public static func intervals(userInterval: TimeInterval, demands: Set<Demand>) -> [JobID: TimeInterval] {
         var visible = Set<JobID>()
@@ -42,6 +46,10 @@ public enum SchedulePlanner {
             case .thermal:
                 // Add this after the regular cadence is known.
                 break
+            case .disk:
+                if demands.contains(.popover) || demands.contains(.window(.overview)) || demands.contains(.window(.disk)) {
+                    result[job] = max(userInterval, diskFloor)
+                }
             case .processMemory:
                 if demands.contains(.memoryProcesses) || demands.contains(.windowMemoryProcesses) {
                     result[job] = max(userInterval, 5)

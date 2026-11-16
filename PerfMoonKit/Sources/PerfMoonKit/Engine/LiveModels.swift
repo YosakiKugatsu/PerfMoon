@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Foundation
 import Observation
 
@@ -12,6 +15,9 @@ public final class DashboardModel {
     public private(set) var cpu: CPUSnapshot
     public private(set) var gpu: GPUSnapshot
     public private(set) var memory: MemorySnapshot
+    public private(set) var disk: DiskSnapshot
+    public private(set) var diskDrives: [DiskDriveSnapshot]
+    public var diskVolumes: [DiskSnapshot] { diskDrives.flatMap(\.volumes) }
     public private(set) var power: PowerSnapshot
     public private(set) var prompt: PanelPrompt?
     public private(set) var historyRevision: Int
@@ -22,6 +28,8 @@ public final class DashboardModel {
         cpu = snapshot.cpu
         gpu = snapshot.gpu
         memory = snapshot.memory
+        disk = snapshot.disk
+        diskDrives = snapshot.diskDrives
         power = snapshot.power
         prompt = snapshot.prompt
         historyRevision = snapshot.historyRevision
@@ -33,6 +41,8 @@ public final class DashboardModel {
         if cpu != snapshot.cpu { cpu = snapshot.cpu }
         if gpu != snapshot.gpu { gpu = snapshot.gpu }
         if memory != snapshot.memory { memory = snapshot.memory }
+        if disk != snapshot.disk { disk = snapshot.disk }
+        if diskDrives != snapshot.diskDrives { diskDrives = snapshot.diskDrives }
         if power != snapshot.power { power = snapshot.power }
         if prompt != snapshot.prompt { prompt = snapshot.prompt }
         if historyRevision != snapshot.historyRevision { historyRevision = snapshot.historyRevision }

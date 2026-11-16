@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import Testing
 @testable import PerfMoonKit
 
@@ -67,6 +70,44 @@ struct MonitorCoreTests {
         while let next = core.nextWakeTime(), next <= end {
             core.tick(now: next)
         }
+    }
+
+    @Test("Disk capacity refreshes only for visible consumers and freezes while paused")
+    func diskCapacityDemand() {
+        let (core, _) = makeCore()
+        core.setDemand(.window(.memory), active: true, now: 1000)
+        run(core, until: 1004)
+        #expect(core.intervals[.disk] == nil)
+        #expect(core.snapshot(now: 1004).disk.usedFraction == nil)
+
+        core.setDemand(.window(.overview), active: true, now: 1004)
+        run(core, until: 1004)
+        let first = core.snapshot(now: 1004).disk
+        #expect(first.totalBytes == 1_000_000_000_000)
+        #expect(first.used.shownValue == 380_000_000_000)
+        #expect(first.usedFraction == nil) // APFS volume bytes do not own the container capacity.
+        #expect(core.snapshot(now: 1004).diskDrives.first?.usedFraction == 0.38)
+        #expect(first.used.timestamp == 1004)
+
+        core.setDemand(.popover, active: true, now: 1005)
+        core.setDemand(.window(.overview), active: false, now: 1005)
+        run(core, until: 1029)
+        #expect(core.snapshot(now: 1029).disk == first)
+        run(core, until: 1030)
+        #expect(core.snapshot(now: 1030).disk.used.timestamp == 1030)
+
+        core.setDemand(.popover, active: false, now: 1031)
+        run(core, until: 1060)
+        #expect(core.nextDue[.disk] == nil)
+        #expect(core.snapshot(now: 1060).disk.used.timestamp == 1030)
+
+        core.setUserPaused(true, now: 1061)
+        core.setDemand(.window(.disk), active: true, now: 1062)
+        core.tick(now: 1062)
+        #expect(core.snapshot(now: 1062).disk.used.timestamp == 1030)
+        core.setUserPaused(false, now: 1063)
+        run(core, until: 1063)
+        #expect(core.snapshot(now: 1063).disk.used.timestamp == 1063)
     }
 
     @Test("Background collection has no thermal-only wake between two-second ticks")

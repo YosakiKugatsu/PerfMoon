@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 #ifndef PERFMOON_NATIVE_H
 #define PERFMOON_NATIVE_H
 #include <stdint.h>

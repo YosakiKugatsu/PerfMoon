@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 // Narrow, read-only IOReport adapter for this M5 Pro / macOS 27 configuration.
 // CLPC identifiers and report legend conventions are based on MIT-licensed macmon.
 // https://github.com/vladkens/macmon -- see THIRD_PARTY_NOTICES.

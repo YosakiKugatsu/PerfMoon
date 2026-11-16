@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 YosakiKugatsu
+// SPDX-License-Identifier: GPL-3.0-only
+
 import PerfMoonKit
 import SwiftUI
 
@@ -409,7 +412,7 @@ private enum MemoryMode: CaseIterable {
 
     var hint: String {
         switch self {
-        case .usage: "Shows where memory goes, including Reusable, Available, and Swap"
+        case .usage: "Shows where memory goes, including Reusable and Swap"
         case .history: "Shows memory used over the last 60 seconds"
         case .processes: "Shows the 10 processes using the most memory"
         }
@@ -470,28 +473,17 @@ struct MemoryPanelSection: View {
         .onChange(of: mode == .processes) { _, visible in onProcessListVisibilityChange(visible) }
     }
 
-    /// Used with Available and Swap beside it, then where the memory goes. The two caption
-    /// lines fit within the headline's height, so the legend is the only added row.
+    /// "Used / installed" with Swap on the right, then where the memory goes.
     private func memorySummary(_ memory: MemorySnapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    ReadingText.bytes(memory.used, font: .pmHeadline)
-                    Text("used of \(Format.wholeGigabytes(memory.physical))")
-                        .font(.pmCaption).foregroundStyle(.secondary)
-                }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                ReadingText.bytes(memory.used, font: .pmHeadline)
+                Text("/ \(Format.wholeGigabytes(memory.physical))")
+                    .font(.pmCaption).foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 1) {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        MemorySwatch(part: .available)
-                        Text("Available").foregroundStyle(.secondary)
-                        ReadingText.bytes(memory.available, font: .pmCaptionNumber)
-                    }
-                    .help(MemoryPart.available.help)
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text("Swap").foregroundStyle(.secondary)
-                        ReadingText.bytes(memory.swapUsed, font: .pmCaptionNumber)
-                    }
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("Swap").foregroundStyle(.secondary)
+                    ReadingText.bytes(memory.swapUsed, font: .pmCaptionNumber)
                 }
                 .font(.pmCaption)
                 .fixedSize()
@@ -555,6 +547,235 @@ private struct ModeChip: View {
         .accessibilityLabel(title)
         .accessibilityHint(hint)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+// MARK: - Disk
+
+/// One physical drive at a time, in a card whose height never changes, so opening its
+/// volumes or connecting a drive can't move Power. The summary shows the drive's capacity and
+/// names its volumes; clicking it lists each volume with its own used space and file system.
+/// With several drives connected, the drive's title becomes a menu.
+struct DiskPanelSection: View {
+    let model: DashboardModel
+
+    /// The chosen drive's BSD name. If it's disconnected, the first (startup) drive shows
+    /// instead, and the choice returns when it's connected again.
+    @AppStorage("panel.disk.drive") private var selectedDriveID = ""
+    @AppStorage("panel.disk.showsVolumes") private var showsVolumes = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Fits the summary's two rows or three volume rows; longer lists scroll inside it.
+    private static let contentHeight: CGFloat = 40
+    private static let visibleVolumes = 3
+
+    var body: some View {
+        let drives = model.diskDrives
+        let drive = drives.first { $0.id == selectedDriveID } ?? drives.first
+        Card {
+            VStack(alignment: .leading, spacing: 8) {
+                header(drives, drive: drive)
+                    .frame(height: 18)
+                Group {
+                    if let drive {
+                        if showsVolumes { volumeList(drive) } else { summary(drive) }
+                    } else {
+                        pending
+                    }
+                }
+                .frame(height: Self.contentHeight, alignment: .top)
+            }
+        }
+    }
+
+    // MARK: Header
+
+    private func header(_ drives: [DiskDriveSnapshot], drive: DiskDriveSnapshot?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            SectionTitle(title: "Disk")
+            if let drive {
+                if showsVolumes {
+                    backButton(drive)
+                } else if drives.count > 1 {
+                    driveMenu(drives, selected: drive)
+                } else {
+                    Text("\(drive.storageTitle)\(Text(" · \(drive.id)").foregroundStyle(.tertiary))")
+                        .font(.pmCaption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(drive.menuTitle)
+                }
+            } else {
+                Text(model.disk.name)
+                    .font(.pmCaption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let drive, showsVolumes {
+                Text(drive.volumes.count == 1 ? "1 volume" : "\(drive.volumes.count) volumes")
+                    .font(.pmCaption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize()
+            } else {
+                DiskAvailableText(capacity: capacity(drive))
+                    .layoutPriority(1)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private func driveMenu(_ drives: [DiskDriveSnapshot], selected: DiskDriveSnapshot) -> some View {
+        Menu {
+            Picker("Drive", selection: Binding(get: { selected.id }, set: { selectedDriveID = $0 })) {
+                ForEach(drives) { Text($0.menuTitle).tag($0.id) }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Text("\(selected.storageTitle) · \(selected.id)")
+                .font(.pmCaption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .help("\(drives.count) drives connected. Choose one to show.")
+        .accessibilityLabel("Drive")
+        .accessibilityValue("\(selected.storageTitle), \(selected.id)")
+        .accessibilityHint("Chooses which of \(drives.count) connected drives to show")
+    }
+
+    private func backButton(_ drive: DiskDriveSnapshot) -> some View {
+        TileButton(color: .primary, isSelected: false, cornerRadius: 5, action: { setShowsVolumes(false) }) {
+            HStack(spacing: 3) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("\(drive.storageTitle) · \(drive.id)")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .font(.pmCaption)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+        }
+        .help("Back to \(drive.storageTitle)")
+        .accessibilityLabel("Back to \(drive.storageTitle)")
+    }
+
+    // MARK: Content
+
+    /// Capacity, then the volumes it holds. The whole summary opens the volume list.
+    private func summary(_ drive: DiskDriveSnapshot) -> some View {
+        TileButton(color: .primary, isSelected: false, cornerRadius: 6, action: { setShowsVolumes(true) }) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .center, spacing: 12) {
+                    DiskUsageText(capacity: drive, font: .pmTileNumber)
+                    DiskCapacityBar(capacity: drive)
+                }
+                HStack(spacing: 4) {
+                    Text(drive.volumeSummary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 6)
+                    Text("Volumes")
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .font(.pmCaption)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, TileLayout.inset)
+            .padding(.vertical, 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, -TileLayout.inset)
+        .help("\(drive.capacityHelp) Click to show each volume's used space and file system.")
+        .accessibilityLabel(drive.storageTitle)
+        .accessibilityValue("\(drive.spokenCapacity)\(drive.capacityScopeName.map { ", for \($0)" } ?? ""), volumes: \(drive.volumeSummary)")
+        .accessibilityHint("Shows each volume's used space and file system")
+    }
+
+    @ViewBuilder
+    private func volumeList(_ drive: DiskDriveSnapshot) -> some View {
+        if drive.volumes.isEmpty {
+            Text("No mounted volumes")
+                .font(.pmCaption)
+                .foregroundStyle(.secondary)
+        } else {
+            let rows = VStack(spacing: 0) {
+                ForEach(drive.volumes) { PanelVolumeRow(volume: $0) }
+            }
+            // Scrolls only past three volumes, inside this card's fixed space.
+            if drive.volumes.count > Self.visibleVolumes {
+                ScrollView { rows }
+            } else {
+                rows
+            }
+        }
+    }
+
+    /// Before the first reading, or if none succeeds: the startup placeholder and its reason.
+    private var pending: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 12) {
+                DiskUsageText(capacity: model.disk, font: .pmTileNumber)
+                DiskCapacityBar(capacity: model.disk)
+            }
+            if let reason = model.disk.available.unavailableReason {
+                Text(reason.message)
+                    .font(.pmCaption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(model.disk.name)
+        .accessibilityValue(model.disk.spokenCapacity)
+    }
+
+    private func capacity(_ drive: DiskDriveSnapshot?) -> any StorageCapacity {
+        if let drive { return drive }
+        return model.disk
+    }
+
+    private func setShowsVolumes(_ value: Bool) {
+        if reduceMotion {
+            showsVolumes = value
+        } else {
+            withAnimation(.snappy(duration: 0.22)) { showsVolumes = value }
+        }
+    }
+}
+
+/// One volume on one line: its name, file system, and its own used space.
+private struct PanelVolumeRow: View {
+    let volume: DiskSnapshot
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(volume.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if volume.isStartup {
+                Text("Startup")
+                    .foregroundStyle(.tertiary)
+                    .fixedSize()
+            }
+            Spacer(minLength: 6)
+            Text(volume.fileSystem)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 42, alignment: .leading)
+            VolumeUsedText(volume: volume)
+                .frame(minWidth: 92, alignment: .trailing)
+        }
+        .font(.pmCaption)
+        .helpIfPresent([volume.name, volume.fileSystem, volume.locationText].filter { !$0.isEmpty }.joined(separator: " · "))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(volume.isStartup ? "\(volume.name), startup volume" : volume.name)
+        .accessibilityValue(volume.spokenVolume)
     }
 }
 
