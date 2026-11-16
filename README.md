@@ -4,7 +4,7 @@
 
 PerfMoon is a native macOS performance monitor for Apple silicon. See key readings in the menu bar, open the quick panel for a closer look, or use the main window to explore up to 15 minutes of history. PerfMoon is built with SwiftUI and AppKit.
 
-[Releases](https://github.com/YosakiKugatsu/PerfMoon/releases) · [Build from source](#build-from-source) · [Contributing](CONTRIBUTING.md) · [GPL v3](LICENSE)
+[Download v0.0.1 (DMG)](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.1/PerfMoon-0.0.1-arm64.dmg) · [Install](#install) · [Releases](https://github.com/YosakiKugatsu/PerfMoon/releases) · [Build from source](#build-from-source) · [Contributing](CONTRIBUTING.md) · [GPL v3](LICENSE)
 
 ## Features
 
@@ -19,16 +19,23 @@ PerfMoon is a native macOS performance monitor for Apple silicon. See key readin
 
 Choose a 1-, 5-, or 15-minute chart range in the main window. You can pause monitoring, choose a CPU temperature source, adjust the update interval, and see which metric sources are available in Settings.
 
-## Requirements
+## Install
 
-- Apple silicon Mac running macOS 27.0 or later.
-- Xcode 27.2 or later for the source build. Run `xcodebuild -version` to check the active version.
+The DMG requires an Apple silicon Mac running macOS 27.0 or later. You don't need Xcode to install it.
+
+1. Download and open [PerfMoon-0.0.1-arm64.dmg](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.1/PerfMoon-0.0.1-arm64.dmg).
+2. Drag **PerfMoon.app** to **Applications**, then eject the disk image.
+3. Open **PerfMoon** from **Applications**. Look for it in the menu bar.
+
+The downloaded app is unsigned and not notarized by Apple. If macOS can't verify the developer or check the app on first launch, and you trust the download from this release, go to **System Settings → Privacy & Security → Security**. Choose **Open** if shown, then **Open Anyway** for PerfMoon and confirm. This exception applies only to PerfMoon. See [Apple's guide to opening apps safely](https://support.apple.com/en-us/102445).
+
+## Compatibility
 
 Collector validation for this release focused on Apple M5 Pro. CPU topology, sensor coverage, energy counters, and battery readings vary by Mac and macOS version. PerfMoon shows unavailable readings as missing rather than substituting estimated hardware values. Check **Settings → Data Sources** if a reading is missing.
 
-### Build from source
+## Build from source
 
-Download the tagged source archive from [Releases](https://github.com/YosakiKugatsu/PerfMoon/releases), or clone the repository:
+Building requires Xcode 27.2 or later. Run `xcodebuild -version` to check the active version. Download the [v0.0.1 source archive](https://github.com/YosakiKugatsu/PerfMoon/archive/refs/tags/v0.0.1.tar.gz) or clone the repository:
 
 ```sh
 git clone https://github.com/YosakiKugatsu/PerfMoon.git
@@ -39,6 +46,8 @@ open build/PerfMoon.app
 ```
 
 The build script signs a local copy in `build/`. To install it, move `PerfMoon.app` to **Applications** in Finder. You can also open `PerfMoon.xcodeproj` in Xcode and build the **PerfMoon** scheme.
+
+To reproduce the unsigned DMG from the tagged source, download the [packaging script](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.1/PerfMoon-0.0.1-build-dmg.sh) from the release and run `zsh PerfMoon-0.0.1-build-dmg.sh /path/to/PerfMoon-source`.
 
 ## Using PerfMoon
 
