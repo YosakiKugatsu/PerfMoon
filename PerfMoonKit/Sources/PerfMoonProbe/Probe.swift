@@ -32,8 +32,11 @@ struct PerfMoonProbe {
         }
         if args.contains("--core-history") { engine.setDemand(.coreHistory, active: true) }
         if mode == "processes" { engine.setDemand(.memoryProcesses, active: true) }
+        let topology = native.machine.cpuTopology
         emit(["type": "configuration", "chip": native.machine.chipName,
               "memoryBytes": native.machine.physicalMemory, "gpuCores": native.machine.gpuCoreCount,
+              "logicalCPUs": topology.logicalCPUCount,
+              "cpuClusters": topology.clusters.map { ["title": $0.title, "count": $0.count] },
               "sensors": native.sensors.count, "mode": mode, "interval": interval])
         if args.contains("--exercise") {
             try await exercise(engine)
@@ -47,8 +50,8 @@ struct PerfMoonProbe {
             func put(_ name: String, _ reading: MetricReading) {
                 if let value = reading.value { metrics[name] = value }
             }
-            put("cpuPercent", s.cpu.total); put("sPercent", s.cpu.sCore); put("pPercent", s.cpu.pCore)
-            put("sGHz", s.cpu.sFrequency); put("pGHz", s.cpu.pFrequency); put("cpuW", s.cpu.power)
+            put("cpuPercent", s.cpu.total); put("ePercent", s.cpu.eCore); put("sPercent", s.cpu.sCore); put("pPercent", s.cpu.pCore)
+            put("eGHz", s.cpu.eFrequency); put("sGHz", s.cpu.sFrequency); put("pGHz", s.cpu.pFrequency); put("cpuW", s.cpu.power)
             put("cpuC", s.cpu.temperature); put("gpuPercent", s.gpu.usage); put("gpuGHz", s.gpu.frequency)
             put("gpuC", s.gpu.temperature); put("gpuW", s.gpu.power); put("aneW", s.gpu.anePower)
             put("memoryUsed", s.memory.used); put("memoryPressure", s.memory.pressure)
@@ -93,7 +96,7 @@ struct PerfMoonProbe {
         }
         emit(["type": "summary", "sampleCount": engine.core.sampleCount, "wakeCount": engine.wakeCount,
               "maxSampleMilliseconds": Dictionary(uniqueKeysWithValues: native.maximumSampleMilliseconds.map { ($0.key.rawValue, $0.value) }),
-              "historyCounts": Dictionary(uniqueKeysWithValues: SeriesKey.allCases.map { ($0.rawValue, engine.history.count($0)) })])
+              "historyCounts": Dictionary(uniqueKeysWithValues: engine.history.recordedKeys.map { ($0.rawValue, engine.history.count($0)) })])
         engine.setUserPaused(true)
     }
 
@@ -111,10 +114,10 @@ struct PerfMoonProbe {
             for step in 0..<steps { core.tick(now: 1000 + Double(step * 2)) }
             let elapsed = start.duration(to: .now)
             let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
-            let coreBytes = SeriesKey.allCases.filter(\.isPerCore).reduce(0) { total, key in
+            let coreBytes = core.history.recordedKeys.filter(\.isPerCore).reduce(0) { total, key in
                 total + (core.history.series(key).map { $0.capacity * MemoryLayout<HistorySample>.stride } ?? 0)
             }
-            let aggregateCounts = Dictionary(uniqueKeysWithValues: SeriesKey.allCases.filter { !$0.isPerCore }.map { ($0.rawValue, core.history.count($0)) })
+            let aggregateCounts = Dictionary(uniqueKeysWithValues: SeriesKey.aggregateKeys.map { ($0.rawValue, core.history.count($0)) })
             emit(["type": "historyBenchmark", "trial": trial, "coreHistory": active,
                   "seconds": seconds, "simulatedTicks": steps, "sampleCount": core.sampleCount,
                   "coreBufferBytes": coreBytes, "aggregateHistoryCounts": aggregateCounts])

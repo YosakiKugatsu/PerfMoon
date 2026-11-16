@@ -69,11 +69,11 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
         case .cpuActivity:
             [
                 MetricDescriptor("CPU Usage", quality: .derived, window: .updateInterval),
-                MetricDescriptor("S-Core and P-Core Usage", quality: .derived, window: .updateInterval),
+                MetricDescriptor("Core Group Usage", quality: .derived, window: .updateInterval),
                 MetricDescriptor("Per-Core Usage", quality: .derived, window: .updateInterval),
             ]
         case .cpuFrequency:
-            [MetricDescriptor("Frequency", quality: .derived, window: .updateInterval)]
+            [MetricDescriptor("Core Group Frequency", quality: .derived, window: .updateInterval)]
         case .energy:
             [
                 MetricDescriptor("CPU Power", quality: .estimated, window: .updateInterval),
@@ -187,11 +187,11 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
         }
     }
 
-    /// Fixed metric keys produced by the job. Temperatures are dynamic.
+    /// Fixed keys produced by the job. Per-core activity and sensor keys are supplied by the engine.
     public var keys: [MetricKey] {
         switch self {
-        case .cpuActivity: [.cpuTotal, .cpuS, .cpuP] + (0..<CoreID.count).map(MetricKey.core)
-        case .cpuFrequency: [.cpuFrequencyS, .cpuFrequencyP]
+        case .cpuActivity: [.cpuTotal, .cpuE, .cpuS, .cpuP]
+        case .cpuFrequency: [.cpuFrequencyE, .cpuFrequencyS, .cpuFrequencyP]
         case .energy: [.cpuPower, .gpuPower, .anePower]
         case .gpuActivity: [.gpuUsage, .gpuFrequency]
         case .powerSensors: [.powerInput, .powerSystem, .powerBattery]
@@ -208,9 +208,9 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
 }
 
 public enum MetricKey: Hashable, Sendable {
-    case cpuTotal, cpuS, cpuP
+    case cpuTotal, cpuE, cpuS, cpuP
     case core(Int)
-    case cpuFrequencyS, cpuFrequencyP
+    case cpuFrequencyE, cpuFrequencyS, cpuFrequencyP
     case cpuPower, gpuPower, anePower
     case gpuUsage, gpuFrequency
     case powerInput, powerSystem, powerBattery
@@ -227,7 +227,7 @@ public enum MetricKey: Hashable, Sendable {
     /// Needs a baseline sample before the first value.
     public var isDifferenced: Bool {
         switch self {
-        case .cpuTotal, .cpuS, .cpuP, .core, .cpuFrequencyS, .cpuFrequencyP,
+        case .cpuTotal, .cpuE, .cpuS, .cpuP, .core, .cpuFrequencyE, .cpuFrequencyS, .cpuFrequencyP,
              .cpuPower, .gpuPower, .anePower, .gpuUsage, .gpuFrequency,
              .pageIns, .pageOuts, .swapIns, .swapOuts:
             true
@@ -238,8 +238,8 @@ public enum MetricKey: Hashable, Sendable {
 
     public var unit: MetricUnit {
         switch self {
-        case .cpuTotal, .cpuS, .cpuP, .core, .gpuUsage: .percent
-        case .cpuFrequencyS, .cpuFrequencyP, .gpuFrequency: .gigahertz
+        case .cpuTotal, .cpuE, .cpuS, .cpuP, .core, .gpuUsage: .percent
+        case .cpuFrequencyE, .cpuFrequencyS, .cpuFrequencyP, .gpuFrequency: .gigahertz
         case .cpuPower, .gpuPower, .anePower, .powerInput, .powerSystem, .powerBattery: .watts
         case .batteryState, .adapterConnected, .memoryPressure: .level
         case .memoryUsed, .memoryApp, .memoryWired, .memoryCompressed, .memoryCached,
@@ -253,7 +253,7 @@ public enum MetricKey: Hashable, Sendable {
     public var quality: MetricQuality {
         switch self {
         case .cpuPower, .gpuPower, .anePower: .estimated
-        case .cpuTotal, .cpuS, .cpuP, .core, .cpuFrequencyS, .cpuFrequencyP, .gpuUsage, .gpuFrequency,
+        case .cpuTotal, .cpuE, .cpuS, .cpuP, .core, .cpuFrequencyE, .cpuFrequencyS, .cpuFrequencyP, .gpuUsage, .gpuFrequency,
              .memoryUsed, .pageIns, .pageOuts, .swapIns, .swapOuts, .cpuTemperature, .gpuTemperature:
             .derived
         default: .observed
@@ -263,9 +263,11 @@ public enum MetricKey: Hashable, Sendable {
     public var series: SeriesKey? {
         switch self {
         case .cpuTotal: .cpuTotal
+        case .cpuE: .cpuE
         case .cpuS: .cpuS
         case .cpuP: .cpuP
-        case .core(let index) where (0..<CoreID.count).contains(index): .coreUsage(CoreID(flatIndex: index))
+        case .core(let index) where index >= 0: .coreUsageIndex(index)
+        case .cpuFrequencyE: .cpuFrequencyE
         case .cpuFrequencyS: .cpuFrequencyS
         case .cpuFrequencyP: .cpuFrequencyP
         case .cpuPower: .cpuPower

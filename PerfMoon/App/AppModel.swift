@@ -15,7 +15,11 @@ final class AppModel {
     let statusItem = StatusItemController()
     private(set) lazy var panel = PanelController(app: self)
     var sensorNames: [String: String] { Dictionary(uniqueKeysWithValues: engine.core.sensors.map { ($0.id, $0.name) }) }
-    var coreSensorKeys: [String?] { CoreID.all.map { engine.core.mappedSensor(for: $0) } }
+    var coreSensorKeys: [Int: String] {
+        Dictionary(uniqueKeysWithValues: engine.core.machine.cpuTopology.cores.compactMap { core in
+            engine.core.mappedSensor(for: core).map { (core.flatIndex, $0) }
+        })
+    }
     private var changingLoginItem = false
     private let diagnostics = RuntimeDiagnostics()
 

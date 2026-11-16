@@ -34,6 +34,7 @@ private struct PanelChart {
     let title: String
     let color: Color
     let scale: SparklineScale
+    var unavailableReason: UnavailableReason? = nil
 }
 
 // MARK: - CPU
@@ -44,8 +45,11 @@ struct CPUPanelSection: View {
     let model: DashboardModel
 
     @AppStorage("panel.cpu.metric") private var metric: PanelMetric = .usage
+    @AppStorage("panel.cpu.activeCluster") private var activeCluster: CoreCluster = .e
+    @AppStorage("panel.expanded.e") private var expandedE = false
     @AppStorage("panel.expanded.s") private var expandedS = false
     @AppStorage("panel.expanded.p") private var expandedP = false
+    @AppStorage("panel.frequency.e") private var frequencyE = false
     @AppStorage("panel.frequency.s") private var frequencyS = false
     @AppStorage("panel.frequency.p") private var frequencyP = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -92,17 +96,48 @@ struct CPUPanelSection: View {
                         }
                     }
                     PanelSparkline(key: chart.key, title: chart.title, color: chart.color, scale: chart.scale,
-                                   end: model.time, revision: model.historyRevision)
+                                   end: model.time, revision: model.historyRevision,
+                                   unavailableReason: chart.unavailableReason)
                         .frame(height: PanelLayout.sparklineHeight)
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    ClusterDisclosure(cluster: .s, cpu: cpu, model: model, isExpanded: binding($expandedS), showsFrequency: $frequencyS)
-                    ClusterDisclosure(cluster: .p, cpu: cpu, model: model, isExpanded: binding($expandedP), showsFrequency: $frequencyP)
+                if !cpu.topology.clusters.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        clusterRows(cpu)
+                    }
+                    .padding(.top, 2)
                 }
-                .padding(.top, 2)
             }
         }
+    }
+
+    @ViewBuilder
+    private func clusterRows(_ cpu: CPUSnapshot) -> some View {
+        let clusters = cpu.topology.clusters
+        if clusters.count > 2, let tier = cpu.topology.cluster(activeCluster) ?? clusters.first {
+            // Keep the popover at a useful height without scrolling the CPU metric picker offscreen.
+            Picker("CPU cluster", selection: Binding(get: { tier.role }, set: { activeCluster = $0 })) {
+                ForEach(clusters) { cluster in Text(cluster.title).tag(cluster.role) }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            clusterRow(tier, cpu: cpu)
+                .id(tier.role)
+        } else {
+            ForEach(clusters) { cluster in clusterRow(cluster, cpu: cpu) }
+        }
+    }
+
+    private func clusterRow(_ cluster: CPUClusterTopology, cpu: CPUSnapshot) -> some View {
+        let expanded: Binding<Bool>
+        let frequency: Binding<Bool>
+        switch cluster.role {
+        case .e: (expanded, frequency) = ($expandedE, $frequencyE)
+        case .s: (expanded, frequency) = ($expandedS, $frequencyS)
+        case .p: (expanded, frequency) = ($expandedP, $frequencyP)
+        }
+        return ClusterDisclosure(cluster: cluster, cpu: cpu, model: model,
+                                 isExpanded: binding(expanded), showsFrequency: frequency)
     }
 
     /// Older builds stored only CPU metrics here; anything else falls back to usage.
@@ -115,9 +150,12 @@ struct CPUPanelSection: View {
 
     private func panelChart(_ metric: PanelMetric) -> PanelChart {
         switch metric {
-        case .temperature: PanelChart(key: .cpuTemperature, title: "CPU temperature", color: Palette.temperature, scale: .temperature)
-        case .power: PanelChart(key: .cpuPower, title: "CPU power", color: Palette.power, scale: .watts)
-        case .usage, .anePower, .frequency: PanelChart(key: .cpuTotal, title: "CPU usage", color: Palette.cpu, scale: .percent)
+        case .temperature: PanelChart(key: .cpuTemperature, title: "CPU temperature", color: Palette.temperature, scale: .temperature,
+                                     unavailableReason: model.cpu.temperature.unavailableReason)
+        case .power: PanelChart(key: .cpuPower, title: "CPU power", color: Palette.power, scale: .watts,
+                               unavailableReason: model.cpu.power.unavailableReason)
+        case .usage, .anePower, .frequency: PanelChart(key: .cpuTotal, title: "CPU usage", color: Palette.cpu, scale: .percent,
+                                                      unavailableReason: model.cpu.total.unavailableReason)
         }
     }
 
@@ -145,24 +183,25 @@ struct CPUPanelSection: View {
 
 /// A cluster row that expands to show every core. Click, Return, or Space toggles.
 private struct ClusterDisclosure: View {
-    let cluster: CoreCluster
+    let cluster: CPUClusterTopology
     let cpu: CPUSnapshot
     let model: DashboardModel
     @Binding var isExpanded: Bool
     @Binding var showsFrequency: Bool
 
     var body: some View {
-        let usage = cpu.usage(cluster)
+        let usage = cpu.usage(cluster.role)
+        let frequency = cpu.frequency(cluster.role)
         HStack(spacing: 8) {
-            CoreTierIcon(tier: .cluster(cluster))
+            CoreTierIcon(tier: .cluster(cluster.role))
                 .frame(height: PanelLayout.clusterHeight)
                 .contentShape(Rectangle())
                 .onTapGesture { isExpanded.toggle() }
             ZStack {
                 if isExpanded {
-                    PanelCoreGrid(cluster: cluster, cpu: cpu, cellHeight: cluster == .s ? PanelLayout.clusterHeight : PanelLayout.compactCellHeight)
+                    expandedGrid
                         .disclosureInteraction(isExpanded: $isExpanded,
-                            label: "\(cluster.spokenTitle), \(cluster.count) cores", value: accessibilityValue(usage),
+                            label: "\(cluster.title), \(cluster.count) cores", value: accessibilityValue(usage),
                             hint: "Shows cluster usage and frequency", preservesChildren: true)
                         .transition(.opacity)
                 } else {
@@ -175,22 +214,22 @@ private struct ClusterDisclosure: View {
                             ReadingText.percent(usage, font: .system(size: 13, weight: .semibold).monospacedDigit())
                         }
                         .disclosureInteraction(isExpanded: $isExpanded,
-                            label: "\(cluster.spokenTitle), \(cluster.count) cores", value: accessibilityValue(usage),
+                            label: "\(cluster.title), \(cluster.count) cores", value: accessibilityValue(usage),
                             hint: "Shows per-core usage")
                         HStack(spacing: 8) {
                             Group {
-                                if showsFrequency {
-                                    Sparkline(key: cluster == .s ? .cpuFrequencyS : .cpuFrequencyP,
-                                              color: Palette.cluster(cluster), end: model.time, revision: model.historyRevision,
+                                if showsFrequency && frequency.unavailableReason == nil {
+                                    Sparkline(key: cluster.role.frequencySeries,
+                                              color: Palette.cluster(cluster.role), end: model.time, revision: model.historyRevision,
                                               domain: nil, zeroBased: true)
                                 } else {
-                                    Meter(fraction: usage.shownValue.map { $0 / 100 }, color: Palette.cluster(cluster))
+                                    Meter(fraction: usage.shownValue.map { $0 / 100 }, color: Palette.cluster(cluster.role))
                                 }
                             }
                             .frame(maxWidth: .infinity, minHeight: 14, maxHeight: 14)
                             .contentShape(Rectangle())
                             .onTapGesture { isExpanded.toggle() }
-                            FrequencyChip(cluster: cluster, reading: cpu.frequency(cluster), isOn: $showsFrequency)
+                            FrequencyChip(cluster: cluster, reading: frequency, isOn: $showsFrequency)
                                 .fixedSize()
                                 .frame(width: 88, alignment: .trailing)
                         }
@@ -211,10 +250,21 @@ private struct ClusterDisclosure: View {
         }
     }
 
+    @ViewBuilder private var expandedGrid: some View {
+        let grid = PanelCoreGrid(cluster: cluster, cpu: cpu,
+                                cellHeight: cluster.count <= 6 ? PanelLayout.clusterHeight : PanelLayout.compactCellHeight)
+        if cluster.count <= 12 {
+            grid
+        } else {
+            ScrollView(.vertical) { grid }
+                .scrollIndicators(.visible)
+        }
+    }
+
     private func accessibilityValue(_ usage: MetricReading) -> String {
         var parts: [String] = []
         parts.append(usage.shownValue.map(Format.spokenPercent) ?? ReadingText.placeholderHelp(usage))
-        if let frequency = cpu.frequency(cluster).shownValue {
+        if let frequency = cpu.frequency(cluster.role).shownValue {
             parts.append("frequency \(Format.spokenFrequency(frequency))")
         }
         parts.append(isExpanded ? "expanded" : "collapsed")
@@ -225,34 +275,36 @@ private struct ClusterDisclosure: View {
 /// A cluster's frequency, which also swaps the usage bar for a 60-second frequency line.
 /// The chart symbol marks it as a chart control; the tint shows the line is on.
 private struct FrequencyChip: View {
-    let cluster: CoreCluster
+    let cluster: CPUClusterTopology
     let reading: MetricReading
     @Binding var isOn: Bool
 
     var body: some View {
-        TileButton(color: Palette.cluster(cluster), isSelected: isOn, cornerRadius: 5, action: { isOn.toggle() }) {
+        let selected = isOn && reading.unavailableReason == nil
+        TileButton(color: Palette.cluster(cluster.role), isSelected: selected, cornerRadius: 5, action: { isOn.toggle() }) {
             HStack(spacing: 3) {
                 Image(systemName: "chart.xyaxis.line")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(isOn ? .primary : .tertiary)
-                ReadingText.frequency(reading, emphasis: isOn ? .primary : .secondary)
+                    .foregroundStyle(selected ? .primary : .tertiary)
+                ReadingText.frequency(reading, emphasis: selected ? .primary : .secondary)
             }
             .padding(.horizontal, 5)
             // Stays within the 14 pt bar row, so the 40 pt cluster slot doesn't grow.
             .padding(.vertical, 0.5)
         }
-        .help(isOn ? "The line shows \(cluster.title) frequency for the last 60 seconds. Click to show usage."
-                   : "Show \(cluster.title) frequency for the last 60 seconds")
-        .accessibilityLabel("\(cluster.spokenTitle) frequency")
+        .disabled(reading.unavailableReason != nil)
+        .help(reading.unavailableReason?.message ?? (selected ? "The line shows \(cluster.title) frequency for the last 60 seconds. Click to show usage."
+                   : "Show \(cluster.title) frequency for the last 60 seconds"))
+        .accessibilityLabel("\(cluster.title) frequency")
         .accessibilityValue(ReadingText.spoken(reading, Format.spokenFrequency))
-        .accessibilityHint(isOn ? "Shows the usage bar again" : "Shows frequency history in place of the usage bar")
-        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .accessibilityHint(selected ? "Shows the usage bar again" : "Shows frequency history in place of the usage bar")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
-/// Six fixed-width cells per row; the panel reserves room for two P-Core rows.
+/// Six fixed-width cells per row; larger clusters scroll within the expanded slot.
 private struct PanelCoreGrid: View {
-    let cluster: CoreCluster
+    let cluster: CPUClusterTopology
     let cpu: CPUSnapshot
     var cellHeight: CGFloat = 32
 
@@ -269,7 +321,7 @@ private struct PanelCoreGrid: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(cluster.spokenTitle) cores")
+        .accessibilityLabel("\(cluster.title) cores")
     }
 }
 
@@ -378,7 +430,8 @@ struct GPUPanelSection: View {
                         }
                     }
                     PanelSparkline(key: chart.key, title: chart.title, color: chart.color, scale: chart.scale,
-                                   end: model.time, revision: model.historyRevision)
+                                   end: model.time, revision: model.historyRevision,
+                                   unavailableReason: chart.unavailableReason)
                         .frame(height: PanelLayout.sparklineHeight)
                         .padding(.top, 2)
                 }
@@ -388,11 +441,16 @@ struct GPUPanelSection: View {
 
     private func panelChart(_ metric: PanelMetric) -> PanelChart {
         switch metric {
-        case .usage: PanelChart(key: .gpuUsage, title: "GPU usage", color: Palette.gpu, scale: .percent)
-        case .temperature: PanelChart(key: .gpuTemperature, title: "GPU temperature", color: Palette.temperature, scale: .temperature)
-        case .power: PanelChart(key: .gpuPower, title: "GPU power", color: Palette.power, scale: .watts)
-        case .anePower: PanelChart(key: .anePower, title: "ANE power", color: Palette.ane, scale: .watts)
-        case .frequency: PanelChart(key: .gpuFrequency, title: "GPU frequency", color: Palette.gpu, scale: .gigahertz)
+        case .usage: PanelChart(key: .gpuUsage, title: "GPU usage", color: Palette.gpu, scale: .percent,
+                                unavailableReason: model.gpu.usage.unavailableReason)
+        case .temperature: PanelChart(key: .gpuTemperature, title: "GPU temperature", color: Palette.temperature, scale: .temperature,
+                                     unavailableReason: model.gpu.temperature.unavailableReason)
+        case .power: PanelChart(key: .gpuPower, title: "GPU power", color: Palette.power, scale: .watts,
+                               unavailableReason: model.gpu.power.unavailableReason)
+        case .anePower: PanelChart(key: .anePower, title: "ANE power", color: Palette.ane, scale: .watts,
+                                  unavailableReason: model.gpu.anePower.unavailableReason)
+        case .frequency: PanelChart(key: .gpuFrequency, title: "GPU frequency", color: Palette.gpu, scale: .gigahertz,
+                                   unavailableReason: model.gpu.frequency.unavailableReason)
         }
     }
 }

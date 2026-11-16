@@ -85,7 +85,7 @@ private struct PanelHeader: View {
                     Label("Paused", systemImage: "pause.fill")
                         .labelStyle(PausedLabelStyle())
                 } else {
-                    Text("\(CoreID.count)-Core CPU · \(machine.gpuCoreCount)-Core GPU · \(Format.wholeGigabytes(machine.physicalMemory))")
+                    Text(hardwareSummary)
                         .font(.pmCaption)
                         .foregroundStyle(.secondary)
                 }
@@ -118,6 +118,18 @@ private struct PanelHeader: View {
         .padding(.trailing, 12)
         .padding(.top, 12)
         .padding(.bottom, 10)
+    }
+
+    private var hardwareSummary: String {
+        var items: [String] = []
+        if machine.cpuTopology.logicalCPUCount > 0 {
+            items.append("\(machine.cpuTopology.logicalCPUCount)-Core CPU")
+        }
+        if machine.gpuCoreCount > 0 {
+            items.append("\(machine.gpuCoreCount)-Core GPU")
+        }
+        items.append(Format.wholeGigabytes(machine.physicalMemory))
+        return items.joined(separator: " · ")
     }
 }
 

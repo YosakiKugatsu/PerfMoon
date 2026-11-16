@@ -19,7 +19,11 @@ enum CoreTierSymbol {
     }
 
     static func cluster(_ cluster: CoreCluster) -> CoreTierSymbol {
-        cluster == .s ? .superCore : .performance
+        switch cluster {
+        case .e: .efficiency
+        case .s: .superCore
+        case .p: .performance
+        }
     }
 }
 
@@ -316,43 +320,56 @@ struct ThrottleBadge: View {
     }
 }
 
-/// "S 3.0 · P 2.1 GHz": one shared unit when both values are in gigahertz, so it never truncates.
-struct FrequencyPair: View {
-    let s: MetricReading
-    let p: MetricReading
+/// Frequencies use the detected core roles; use one shared GHz unit when all readings allow it.
+struct ClusterFrequencies: View {
+    let cpu: CPUSnapshot
     var font: Font = .pmBodyNumber
 
     var body: some View {
-        let shared = (s.shownValue ?? 0) >= 1 && (p.shownValue ?? 0) >= 1
-        HStack(alignment: .firstTextBaseline, spacing: 3) {
-            Text("S").foregroundStyle(.secondary)
-            ReadingText(reading: s, format: { value in
-                if shared { return String(format: "%.1f", value) }
-                return Format.frequency(value)
-            }, font: font)
-            Text("·").foregroundStyle(.tertiary).padding(.horizontal, 1)
-            Text("P").foregroundStyle(.secondary)
-            ReadingText(reading: p, format: { value in
-                if shared { return String(format: "%.1f", value) }
-                return Format.frequency(value)
-            }, font: font)
-            if shared {
-                Text("GHz")
+        let clusters = cpu.topology.clusters
+        let shared = clusters.count > 1 && clusters.allSatisfy { (cpu.frequency($0.role).shownValue ?? 0) >= 1 }
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                ForEach(clusters) { cluster in
+                    if cluster.id != clusters.first?.id {
+                        Text("·").foregroundStyle(.tertiary).padding(.horizontal, 1)
+                    }
+                    clusterFrequency(cluster, sharedUnit: shared)
+                }
+                if shared {
+                    Text("GHz")
+                }
             }
+            .fixedSize()
+
+            VStack(alignment: .trailing, spacing: 2) {
+                ForEach(clusters) { cluster in
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        clusterFrequency(cluster, sharedUnit: false)
+                    }
+                }
+            }
+            .fixedSize()
         }
         .font(font)
         .lineLimit(1)
-        .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Frequency")
         .accessibilityValue(spoken)
     }
 
+    @ViewBuilder
+    private func clusterFrequency(_ cluster: CPUClusterTopology, sharedUnit: Bool) -> some View {
+        Text(String(cluster.title.prefix(1))).foregroundStyle(.secondary)
+        ReadingText(reading: cpu.frequency(cluster.role), format: { value in
+            sharedUnit ? String(format: "%.1f", value) : Format.frequency(value)
+        }, font: font)
+    }
+
     private var spoken: String {
-        func part(_ title: String, _ reading: MetricReading) -> String {
-            "\(title) \(reading.shownValue.map(Format.spokenFrequency) ?? ReadingText.placeholderHelp(reading))"
-        }
-        return [part("S-Core", s), part("P-Core", p)].joined(separator: ", ")
+        cpu.topology.clusters.map { cluster in
+            "\(cluster.title) \(ReadingText.spoken(cpu.frequency(cluster.role), Format.spokenFrequency))"
+        }.joined(separator: ", ")
     }
 }
 
@@ -431,7 +448,7 @@ struct InfoButton<Content: View>: View {
 struct LegendKey: View {
     let title: String
     let color: Color
-    var dashed = false
+    var dash: [CGFloat] = []
 
     var body: some View {
         HStack(spacing: 5) {
@@ -439,7 +456,7 @@ struct LegendKey: View {
                 var path = Path()
                 path.move(to: CGPoint(x: 0, y: size.height / 2))
                 path.addLine(to: CGPoint(x: size.width, y: size.height / 2))
-                context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: dashed ? [3, 2] : []))
+                context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: dash))
             }
             .frame(width: 12, height: 6)
             Text(title)

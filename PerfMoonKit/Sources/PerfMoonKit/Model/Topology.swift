@@ -3,26 +3,27 @@
 
 import Foundation
 
+/// Hardware CPU tier. A machine may have any verified subset of these tiers.
 public enum CoreCluster: String, Sendable, CaseIterable, Hashable {
+    case e
     case s
     case p
 
     public var title: String {
         switch self {
+        case .e: "E-Core"
         case .s: "S-Core"
         case .p: "P-Core"
         }
     }
 
     public var spokenTitle: String {
-        switch self {
-        case .s: "S-Core"
-        case .p: "P-Core"
-        }
+        title
     }
 
     public var count: Int {
         switch self {
+        case .e: 0 // The original preview fixture has no E cores.
         case .s: CoreID.sCount
         case .p: CoreID.pCount
         }
@@ -33,19 +34,29 @@ public enum CoreCluster: String, Sendable, CaseIterable, Hashable {
     }
 }
 
-/// A core in UI order: S0–S5, then P0–P11. Collectors map hardware numbering into this order.
+/// A core in display order, with its independently verified Mach slot.
 public struct CoreID: Hashable, Sendable, Identifiable {
+    // Retained for the original preview fixture, not for live hardware discovery.
     public static let sCount = 6
     public static let pCount = 12
     public static let count = sCount + pCount
     public static let all: [CoreID] = CoreCluster.allCases.flatMap(\.cores)
 
-    public var cluster: CoreCluster
-    public var index: Int
+    public let cluster: CoreCluster
+    public let index: Int
+    public let flatIndex: Int
+    public let label: String
+    let machIndex: Int
 
     public init(cluster: CoreCluster, index: Int) {
-        self.cluster = cluster
-        self.index = index
+        switch cluster {
+        case .e:
+            self.init(cluster: cluster, index: index, flatIndex: Self.count + index, machIndex: index, prefix: "E")
+        case .s:
+            self.init(cluster: cluster, index: index, flatIndex: index, machIndex: Self.pCount + index, prefix: "S")
+        case .p:
+            self.init(cluster: cluster, index: index, flatIndex: Self.sCount + index, machIndex: index, prefix: "P")
+        }
     }
 
     public init(flatIndex: Int) {
@@ -56,9 +67,127 @@ public struct CoreID: Hashable, Sendable, Identifiable {
         }
     }
 
-    public var flatIndex: Int { cluster == .s ? index : CoreID.sCount + index }
-    public var label: String { (cluster == .s ? "S" : "P") + String(index) }
+    init(cluster: CoreCluster, index: Int, flatIndex: Int, machIndex: Int, prefix: String) {
+        self.cluster = cluster
+        self.index = index
+        self.flatIndex = flatIndex
+        self.machIndex = machIndex
+        self.label = "\(prefix)\(index)"
+    }
+
     public var id: Int { flatIndex }
+}
+
+public struct CPUClusterTopology: Sendable, Equatable, Identifiable {
+    public let role: CoreCluster
+    public let title: String
+    public let cores: [CoreID]
+    public var count: Int { cores.count }
+    public var id: CoreCluster { role }
+}
+
+public struct CPUTopology: Sendable, Equatable {
+    public let logicalCPUCount: Int
+    public let clusters: [CPUClusterTopology]
+    public let cores: [CoreID]
+
+    public func cluster(_ role: CoreCluster) -> CPUClusterTopology? { clusters.first { $0.role == role } }
+    public func core(atFlatIndex index: Int) -> CoreID? { cores.indices.contains(index) ? cores[index] : nil }
+
+    public init(logicalCPUCount: Int) {
+        self.init(logicalCPUCount: max(0, logicalCPUCount), clusters: [])
+    }
+
+    private init(logicalCPUCount: Int, clusters: [CPUClusterTopology]) {
+        self.logicalCPUCount = logicalCPUCount
+        self.clusters = clusters
+        self.cores = clusters.flatMap(\.cores)
+    }
+
+    public static let fixture = CPUTopology(logicalCPUCount: CoreID.count, clusters: [
+        CPUClusterTopology(role: .s, title: "S-Core", cores: CoreCluster.s.cores),
+        CPUClusterTopology(role: .p, title: "P-Core", cores: CoreCluster.p.cores),
+    ])
+
+    enum Tier: String, Hashable {
+        case efficiency, performance, `super`
+
+        var role: CoreCluster {
+            switch self {
+            case .efficiency: .e
+            case .performance: .p
+            case .super: .s
+            }
+        }
+    }
+
+    /// XNU reports the load vector in kernel logical-CPU order. Match I/O Registry
+    /// IDs to their firmware tier tags, then verify counts independently via sysctl.
+    /// A missing, inconsistent, or unrepresentable map leaves only system CPU usage.
+    init(logicalCPUCount: Int, performanceLevels: [(name: String?, count: Int)], firmwareTypes: [Int: String]) {
+        let fallback = CPUTopology(logicalCPUCount: logicalCPUCount)
+        guard !performanceLevels.isEmpty, performanceLevels.count <= CoreCluster.allCases.count,
+              performanceLevels.allSatisfy({ $0.count > 0 && $0.count <= logicalCPUCount }),
+              performanceLevels.map(\.count).reduce(0, +) == logicalCPUCount,
+              firmwareTypes.count == logicalCPUCount else {
+            self = fallback
+            return
+        }
+        var expected: [Tier: Int] = [:]
+        for level in performanceLevels {
+            guard let name = level.name else { continue }
+            guard let tier = Tier(rawValue: name.lowercased()), expected.updateValue(level.count, forKey: tier) == nil else {
+                self = fallback
+                return
+            }
+        }
+        // M is explicitly the middle Performance tier, distinguishing it
+        // from the P tag naming the Super tier on this firmware. With only
+        // E/P tags, keep requiring names: P can mean Performance or Super.
+        let tags = Set(firmwareTypes.values)
+        let unnamedTiers = expected.count != performanceLevels.count
+        let hasUnambiguousFirmwareTiers = tags.contains("M") && tags.contains("P")
+        guard !unnamedTiers || hasUnambiguousFirmwareTiers else { self = fallback; return }
+        let highestIsSuper = expected[.super] != nil || (unnamedTiers && hasUnambiguousFirmwareTiers)
+
+        var mapped: [Tier: [Int]] = [:]
+        var tagForTier: [Tier: String] = [:]
+        for cpu in 0..<logicalCPUCount {
+            guard let tag = firmwareTypes[cpu] else { self = fallback; return }
+            let tier: Tier
+            switch tag {
+            case "E": tier = .efficiency
+            case "M": tier = .performance
+            // Older chips call P the performance tier. On the firmware that
+            // advertises a separate Super tier, P denotes Super and M Performance.
+            case "P": tier = highestIsSuper ? .super : .performance
+            default: self = fallback; return
+            }
+            guard tagForTier[tier] == nil || tagForTier[tier] == tag else {
+                self = fallback
+                return
+            }
+            tagForTier[tier] = tag
+            mapped[tier, default: []].append(cpu)
+        }
+        guard expected.allSatisfy({ mapped[$0.key]?.count == $0.value }),
+              mapped.values.map(\.count).sorted() == performanceLevels.map(\.count).sorted() else {
+            self = fallback
+            return
+        }
+        var clusters: [CPUClusterTopology] = []
+        var offset = 0
+        for tier in [Tier.efficiency, .super, .performance] {
+            guard let ids = mapped[tier] else { continue }
+            let role = tier.role
+            let cores = ids.enumerated().map { index, cpu in
+                CoreID(cluster: role, index: index, flatIndex: offset + index, machIndex: cpu, prefix: role.rawValue.uppercased())
+            }
+            clusters.append(CPUClusterTopology(role: role, title: role.title, cores: cores))
+            offset += ids.count
+        }
+        self.init(logicalCPUCount: logicalCPUCount, clusters: clusters)
+    }
 }
 
 public struct MachineInfo: Sendable, Equatable {
@@ -66,12 +195,15 @@ public struct MachineInfo: Sendable, Equatable {
     public var shortChipName: String
     public var gpuCoreCount: Int
     public var physicalMemory: Double
+    public var cpuTopology: CPUTopology
 
-    public init(chipName: String, shortChipName: String, gpuCoreCount: Int, physicalMemory: Double) {
+    public init(chipName: String, shortChipName: String, gpuCoreCount: Int, physicalMemory: Double,
+                cpuTopology: CPUTopology = .fixture) {
         self.chipName = chipName
         self.shortChipName = shortChipName
         self.gpuCoreCount = gpuCoreCount
         self.physicalMemory = physicalMemory
+        self.cpuTopology = cpuTopology
     }
 }
 

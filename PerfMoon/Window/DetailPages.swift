@@ -10,11 +10,9 @@ struct GPUPage: View {
     let model: DashboardModel
     let context: ChartContext
 
-    @State private var width: CGFloat = 800
-
     var body: some View {
         let gpu = model.gpu
-        PageScroll(width: $width) {
+        PageScroll {
             StatStrip {
                 StatBlock(label: "Usage", isFirst: true) {
                     ReadingText.percent(gpu.usage, font: .pmStatNumber)
@@ -23,11 +21,17 @@ struct GPUPage: View {
                 }
                 StatBlock(label: "Frequency") {
                     ReadingText.frequency(gpu.frequency, font: .pmStatNumber, emphasis: .primary)
+                } detail: {
+                    ReasonCaption(reading: gpu.frequency)
                 }
                 StatBlock(label: "Temperature") {
                     TemperatureText(reading: gpu.temperature, font: .pmStatNumber, emphasis: .primary)
                 } detail: {
-                    Text("GPU Max").font(.pmCaption).foregroundStyle(.secondary)
+                    if gpu.temperature.unavailableReason == nil {
+                        Text("GPU Max").font(.pmCaption).foregroundStyle(.secondary)
+                    } else {
+                        ReasonCaption(reading: gpu.temperature)
+                    }
                 }
                 StatBlock(label: "GPU Power") {
                     ReadingText.watts(gpu.power, font: .pmStatNumber)
@@ -42,7 +46,7 @@ struct GPUPage: View {
                 HistoryChart(
                     series: [ChartSeries(key: .gpuUsage, name: "GPU Usage", color: Palette.gpu, style: .lineAndArea)],
                     scale: .percent, range: context.range, end: context.end, revision: context.revision,
-                    accessibilityName: "GPU usage"
+                    accessibilityName: "GPU usage", unavailableReason: gpu.usage.unavailableReason
                 )
             }
 
@@ -53,7 +57,7 @@ struct GPUPage: View {
                     HistoryChart(
                         series: [ChartSeries(key: .gpuTemperature, name: "GPU Temperature", color: Palette.temperature)],
                         scale: .temperature, range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "GPU temperature"
+                        accessibilityName: "GPU temperature", unavailableReason: gpu.temperature.unavailableReason
                     )
                 }
                 ChartCard(title: "GPU Power", height: 130) {
@@ -62,7 +66,7 @@ struct GPUPage: View {
                     HistoryChart(
                         series: [ChartSeries(key: .gpuPower, name: "GPU Power", color: Palette.gpu, style: .lineAndArea)],
                         scale: .watts(minimumMax: 10), range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "GPU power"
+                        accessibilityName: "GPU power", unavailableReason: gpu.power.unavailableReason
                     )
                 }
             }
@@ -79,7 +83,7 @@ struct GPUPage: View {
                     HistoryChart(
                         series: [ChartSeries(key: .anePower, name: "ANE Power", color: Palette.ane, style: .lineAndArea)],
                         scale: .watts(minimumMax: 2), range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "ANE power"
+                        accessibilityName: "ANE power", unavailableReason: gpu.anePower.unavailableReason
                     )
                     .frame(height: 120)
                 }
@@ -95,16 +99,16 @@ struct GPUPage: View {
 struct MemoryPage: View {
     let model: DashboardModel
     let context: ChartContext
+    let width: CGFloat
     /// Reports whether the process list is on screen. False when collapsed or when the page goes away.
     let setProcessListVisible: (Bool) -> Void
 
-    @State private var width: CGFloat = 800
     /// Not persisted: each visit starts collapsed, so a scan starts only after a click.
     @State private var showsProcesses = false
 
     var body: some View {
         let memory = model.memory
-        PageScroll(width: $width) {
+        PageScroll {
             Card(padding: 14) {
                 VStack(alignment: .leading, spacing: 12) {
                     CardHeader(title: "Memory") {
@@ -198,13 +202,12 @@ struct MemoryPage: View {
                     }
                     if showsProcesses {
                         ProcessMemoryList(snapshot: memory.processes, showsPID: width >= 700)
+                            .onAppear { setProcessListVisible(true) }
+                            .onDisappear { setProcessListVisible(false) }
                     }
                 }
             }
         }
-        .onAppear { setProcessListVisible(showsProcesses) }
-        .onChange(of: showsProcesses) { _, visible in setProcessListVisible(visible) }
-        .onDisappear { setProcessListVisible(false) }
     }
 }
 
@@ -268,11 +271,10 @@ private struct MemoryExplanation: View {
 struct DiskPage: View {
     let model: DashboardModel
 
-    @State private var width: CGFloat = 800
 
     var body: some View {
         let drives = model.diskDrives
-        PageScroll(width: $width) {
+        PageScroll {
             if drives.isEmpty {
                 // Before the first reading, or if none succeeds.
                 Card(padding: 14) {
@@ -505,12 +507,11 @@ struct PowerPage: View {
     let model: DashboardModel
     let context: ChartContext
 
-    @State private var width: CGFloat = 800
 
     var body: some View {
         let power = model.power
         let gpu = model.gpu
-        PageScroll(width: $width) {
+        PageScroll {
             HStack(spacing: 6) {
                 Text("Three independent readings")
                     .font(.pmCaption)
@@ -573,11 +574,18 @@ struct PowerPage: View {
                             ChartSeries(key: .anePower, name: "ANE Power", color: Palette.ane),
                         ],
                         scale: .watts(minimumMax: 10), range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "Chip power"
+                        accessibilityName: "Chip power", unavailableReason: chipPowerReason
                     )
                 }
             }
         }
+    }
+
+    private var chipPowerReason: UnavailableReason? {
+        let gpu = model.gpu
+        guard let reason = model.cpu.power.unavailableReason,
+              gpu.power.unavailableReason == reason, gpu.anePower.unavailableReason == reason else { return nil }
+        return reason
     }
 }
 

@@ -7,8 +7,9 @@ import SwiftUI
 /// Semantic colors only; no hard-coded hex values.
 enum Palette {
     static let cpu = Color.blue
+    static let eCore = Color.green
     static let sCore = cpu
-    static let pCore = cpu
+    static let pCore = Color.indigo
     static let gpu = Color.teal
     static let ane = Color.purple
     static let power = Color.orange
@@ -19,7 +20,11 @@ enum Palette {
     static let disk = Color.primary.opacity(0.62)
 
     static func cluster(_ cluster: CoreCluster) -> Color {
-        cluster == .s ? sCore : pCore
+        switch cluster {
+        case .e: eCore
+        case .s: sCore
+        case .p: pCore
+        }
     }
 
     static func pressure(_ level: MemoryPressureLevel) -> Color {
@@ -70,8 +75,8 @@ extension EnvironmentValues {
     @Entry var monitorPaused = false
     @Entry var temperatureUnit: TemperatureUnit = .celsius
     @Entry var historyStore: HistoryStore? = nil
-    /// Mapped sensor key per core, S0–S5 then P0–P11; nil when a core has no mapped sensor.
-    @Entry var coreSensorKeys: [String?] = []
+    /// Mapped sensor keys by the core's runtime flat index.
+    @Entry var coreSensorKeys: [Int: String] = [:]
     /// True when readings come from this Mac rather than preview fixtures.
     /// Injected at the root; controls the "Simulated Data" wording only.
     @Entry var isLiveData = false

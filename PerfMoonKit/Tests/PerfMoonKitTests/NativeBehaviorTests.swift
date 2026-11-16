@@ -85,6 +85,91 @@ struct NativeBehaviorTests {
     }
 
     @MainActor
+    @Test("An absent energy channel or temperature mapping does not hide other metrics")
+    func independentlyUnavailableMetrics() {
+        let source = MeasuredProvider()
+        let core = MonitorCore(provider: source)
+        core.start(now: 100)
+        core.tick(now: 100)
+        core.tick(now: 102)
+        #expect(core.reading(.anePower).shownValue == 7)
+        source.omitANE = true
+        core.tick(now: 104)
+        let snapshot = core.snapshot(now: 104)
+        #expect(snapshot.gpu.anePower.unavailableReason == .unsupported)
+        #expect(snapshot.gpu.anePower.shownValue == nil)
+        #expect(snapshot.gpu.power.shownValue == 7)
+        #expect(snapshot.cpu.power.shownValue == 7)
+        #expect(snapshot.cpu.temperature.unavailableReason == .unsupported)
+        #expect(snapshot.gpu.temperature.unavailableReason == .unsupported)
+        source.omitANE = false
+        core.tick(now: 106)
+        let recovered = core.history.samples(.anePower, since: 105)
+        #expect(recovered.first?.startsSegment == true)
+        #expect(recovered.first?.value == 7)
+    }
+
+    @MainActor
+    @Test("A topology wider than 18 cores keeps history for its highest core")
+    func widerTopologyHistory() throws {
+        let topology = CPUTopology(logicalCPUCount: 32,
+            performanceLevels: [("Efficiency", 8), ("Performance", 24)],
+            firmwareTypes: Dictionary(uniqueKeysWithValues: (0..<32).map { ($0, $0 < 8 ? "E" : "P") }))
+        let lastCore = try #require(topology.core(atFlatIndex: 31))
+        let core = MonitorCore(provider: MeasuredProvider(topology: topology))
+        core.start(now: 100)
+        core.setDemand(.coreHistory, active: true, now: 100)
+        core.tick(now: 100)
+        core.tick(now: 102)
+        #expect(core.snapshot(now: 102).cpu.cores.count == 32)
+        #expect(core.snapshot(now: 102).cpu.cores.last?.shownValue == 31)
+        #expect(core.history.last(.coreUsage(lastCore))?.value == 31)
+        core.discardCoreHistory()
+        #expect(core.history.series(.coreUsage(lastCore)) == nil)
+        #expect(core.history.last(.cpuTotal)?.value == 7)
+    }
+
+    @MainActor
+    @Test("Rapidly reopening Overview reuses the disk scan until the next interval or a mount change")
+    func diskReadIsNotRestartedByNavigation() {
+        let core = MonitorCore(provider: MeasuredProvider(backgroundDisk: true))
+        core.start(now: 100)
+        core.setWindowPage(from: nil, to: .overview, now: 100)
+        core.tick(now: 100)
+        for t in 101...105 {
+            core.setWindowPage(from: .overview, to: .cpu, now: Double(t))
+            #expect(core.nextDue[.disk] == nil)
+            core.setWindowPage(from: .cpu, to: .overview, now: Double(t) + 0.2)
+            #expect(core.nextDue[.disk] == 130)
+        }
+        core.setWindowPage(from: .overview, to: .cpu, now: 106)
+        core.diskVolumesDidChange(now: 107)
+        #expect(core.nextDue[.disk] == nil)
+        core.setWindowPage(from: .cpu, to: .overview, now: 108)
+        #expect(core.nextDue[.disk] == 108)
+    }
+
+    @MainActor
+    @Test("Sidebar selection does not broadcast duplicate snapshots to the app")
+    func navigationDoesNotPublishEmptySnapshots() {
+        let engine = MonitorEngine(fixtures: FixtureProvider(), liveProvider: MeasuredProvider())
+        engine.start(scenario: .typical, interval: .one, temperatureSource: .cpuMax)
+        var publications = 0
+        let observer = engine.addObserver { _ in publications += 1 }
+        engine.setWindowPage(from: nil, to: .overview)
+        var page = Page.overview
+        for _ in 0..<100 {
+            let next: Page = page == .overview ? .cpu : .overview
+            engine.setWindowPage(from: page, to: next)
+            page = next
+        }
+        #expect(publications == 1) // The initial observation only; the sampling task yields after this test.
+        #expect(engine.core.demands == [.window(page)])
+        engine.removeObserver(observer)
+        engine.setUserPaused(true)
+    }
+
+    @MainActor
     @Test("Mode changes refresh sensor identities and returning live preserves user pause")
     func providerSwitch() {
         let fixtures = FixtureProvider()
@@ -104,15 +189,34 @@ struct NativeBehaviorTests {
 
 @MainActor
 private final class MeasuredProvider: MetricProvider {
+    var omitANE = false
     var throttleStatus: ThrottleStatus = .normal
     var gpuThrottleStatus: ThrottleStatus = .normal
-    let machine = MachineInfo(chipName: "Test", shortChipName: "Test", gpuCoreCount: 20, physicalMemory: 64 * 1024 * 1024 * 1024)
+    let machine: MachineInfo
+    let diskBackgroundSample: (@Sendable (Double) -> SampleOutcome)?
     let sensors = [SensorInfo(id: "TEST", name: "Test Sensor", category: .other)]
     var isLive: Bool { true }
+    init(topology: CPUTopology = .fixture, backgroundDisk: Bool = false) {
+        machine = MachineInfo(chipName: "Test", shortChipName: "Test", gpuCoreCount: 20,
+                              physicalMemory: 64 * 1024 * 1024 * 1024, cpuTopology: topology)
+        if backgroundDisk {
+            diskBackgroundSample = { _ in .diskDrives([]) }
+        } else {
+            diskBackgroundSample = nil
+        }
+    }
     func open(_ source: SourceID, at time: TimeInterval) -> OpenResult { .opened }
     func close(_ source: SourceID) {}
     func rebaseline(_ source: SourceID, at time: TimeInterval) {}
     func sample(_ job: JobID, request: SampleRequest, at time: TimeInterval) -> SampleOutcome {
-        .measured(Dictionary(uniqueKeysWithValues: job.keys.map { ($0, 7.0) }), window: 2.37)
+        var values = Dictionary(uniqueKeysWithValues: job.keys.map { ($0, 7.0) })
+        if job == .cpuActivity {
+            for core in machine.cpuTopology.cores { values[.core(core.flatIndex)] = Double(core.flatIndex) }
+        }
+        if job == .energy, omitANE {
+            values[.anePower] = nil
+            return .measuredPartial(values, window: 2.37, unsupported: [.anePower])
+        }
+        return .measured(values, window: 2.37)
     }
 }

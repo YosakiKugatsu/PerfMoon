@@ -43,6 +43,8 @@ public enum SampleOutcome: Sendable, Equatable {
     /// A full replacement for the mounted volume list, including removals.
     case diskDrives([DiskDriveSnapshot])
     case measured([MetricKey: Double], window: TimeInterval)
+    /// Only mark keys the collector knows the current machine cannot supply.
+    case measuredPartial([MetricKey: Double], window: TimeInterval, unsupported: Set<MetricKey>)
     /// The source has not produced a new value since the last sample.
     case noNewData
     case failed(SourceFailure)

@@ -5,25 +5,36 @@ import Foundation
 
 public struct CPUSnapshot: Sendable, Equatable {
     public var total: MetricReading
+    public var eCore: MetricReading
     public var sCore: MetricReading
     public var pCore: MetricReading
+    public var eFrequency: MetricReading
     public var sFrequency: MetricReading
     public var pFrequency: MetricReading
     public var power: MetricReading
     public var temperature: MetricReading
     public var temperatureSource: TemperatureSource
-    /// S0–S5 then P0–P11.
+    public var topology: CPUTopology
+    /// Readings in topology display order.
     public var cores: [MetricReading]
     /// Mapped core temperatures; nil when the core has no mapped sensor or it is not being read.
     public var coreTemperatures: [MetricReading?]
     public var throttle: ThrottleStatus = .unavailable
 
     public func usage(_ cluster: CoreCluster) -> MetricReading {
-        cluster == .s ? sCore : pCore
+        switch cluster {
+        case .e: eCore
+        case .s: sCore
+        case .p: pCore
+        }
     }
 
     public func frequency(_ cluster: CoreCluster) -> MetricReading {
-        cluster == .s ? sFrequency : pFrequency
+        switch cluster {
+        case .e: eFrequency
+        case .s: sFrequency
+        case .p: pFrequency
+        }
     }
 }
 

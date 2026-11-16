@@ -43,6 +43,7 @@ final class RuntimeDiagnostics {
         guard mode != lastMode || now - lastTime >= 10 else { return }
         let cost = usage.sample(at: now, window: now - lastTime)
         lastTime = now; lastMode = mode
+        let coreHistoryKeys = engine.history.recordedKeys.filter(\.isPerCore)
         var object: [String: Any] = [
             "epoch": Date().timeIntervalSince1970, "pid": ProcessInfo.processInfo.processIdentifier,
             "demands": demands, "settings": settingsTab as Any? ?? NSNull(),
@@ -51,8 +52,8 @@ final class RuntimeDiagnostics {
             "footprintBytes": cost.footprint.value ?? 0,
             "requestedInterval": engine.core.userInterval,
             "intervals": Dictionary(uniqueKeysWithValues: engine.core.intervals.map { ($0.key.rawValue, $0.value) }),
-            "coreHistorySeries": SeriesKey.allCases.filter { $0.isPerCore && engine.history.series($0) != nil }.count,
-            "coreHistorySamples": SeriesKey.allCases.filter(\.isPerCore).reduce(0) { $0 + engine.history.count($1) },
+            "coreHistorySeries": coreHistoryKeys.count,
+            "coreHistorySamples": coreHistoryKeys.reduce(0) { $0 + engine.history.count($1) },
             "processTimestamp": engine.snapshot.memory.processes.timestamp as Any? ?? NSNull(),
             "processRows": engine.snapshot.memory.processes.entries.count,
         ]

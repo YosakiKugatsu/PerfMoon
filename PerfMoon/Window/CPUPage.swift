@@ -10,7 +10,6 @@ struct CPUPage: View {
     let openSensorSettings: () -> Void
     @Bindable var settings: AppSettings
 
-    @State private var width: CGFloat = 800
     /// Flat index of the inspected core, or −1. Kept across page switches and window reopening.
     @AppStorage("window.cpu.selectedCore") private var selectedIndex = -1
     @Environment(\.sensorNames) private var sensorNames
@@ -18,18 +17,24 @@ struct CPUPage: View {
 
     var body: some View {
         let cpu = model.cpu
-        PageScroll(width: $width) {
+        let usageSeries = cpu.usageChartSeries
+        PageScroll {
             StatStrip {
                 StatBlock(label: "Usage", isFirst: true) {
                     ReadingText.percent(cpu.total, font: .pmStatNumber)
                 } detail: {
                     ReasonCaption(reading: cpu.total)
                 }
-                ForEach(CoreCluster.allCases, id: \.self) { cluster in
+                ForEach(cpu.topology.clusters) { cluster in
                     StatBlock(label: "\(cluster.title) ×\(cluster.count)") {
-                        ReadingText.percent(cpu.usage(cluster), font: .pmStatNumber)
+                        ReadingText.percent(cpu.usage(cluster.role), font: .pmStatNumber)
                     } detail: {
-                        ReadingText.frequency(cpu.frequency(cluster))
+                        let frequency = cpu.frequency(cluster.role)
+                        if frequency.unavailableReason == nil {
+                            ReadingText.frequency(frequency)
+                        } else {
+                            ReasonCaption(reading: frequency)
+                        }
                     }
                 }
                 StatBlock(label: "Temperature") {
@@ -38,10 +43,14 @@ struct CPUPage: View {
                         ThrottleBadge(status: cpu.throttle)
                     }
                 } detail: {
-                    Text(sourceTitle(cpu.temperatureSource))
-                        .font(.pmCaption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if cpu.temperature.unavailableReason == nil {
+                        Text(sourceTitle(cpu.temperatureSource))
+                            .font(.pmCaption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        ReasonCaption(reading: cpu.temperature)
+                    }
                 }
                 StatBlock(label: "CPU Power") {
                     ReadingText.watts(cpu.power, font: .pmStatNumber)
@@ -53,20 +62,18 @@ struct CPUPage: View {
             // The two whole-CPU histories side by side, so load and heat read together.
             EqualHeightRow {
                 ChartCard(title: "Usage", height: 160) {
-                    HStack(spacing: 10) {
-                        LegendKey(title: "Total", color: Palette.cpu.opacity(0.35))
-                        LegendKey(title: "S-Core", color: Palette.sCore)
-                        LegendKey(title: "P-Core", color: Palette.pCore, dashed: true)
+                    ViewThatFits(in: .horizontal) {
+                        usageLegend(usageSeries[...])
+                        VStack(alignment: .trailing, spacing: 1) {
+                            usageLegend(usageSeries.prefix(2))
+                            usageLegend(usageSeries.dropFirst(2))
+                        }
                     }
                 } chart: {
                     HistoryChart(
-                        series: [
-                            ChartSeries(key: .cpuTotal, name: "Total", color: Palette.cpu, style: .area),
-                            ChartSeries(key: .cpuS, name: "S-Core", color: Palette.sCore),
-                            ChartSeries(key: .cpuP, name: "P-Core", color: Palette.pCore, dashed: true),
-                        ],
+                        series: usageSeries,
                         scale: .percent, range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "CPU usage"
+                        accessibilityName: "CPU usage", unavailableReason: cpu.total.unavailableReason
                     )
                 }
                 ChartCard(title: "Temperature", height: 160) {
@@ -75,32 +82,44 @@ struct CPUPage: View {
                     HistoryChart(
                         series: [ChartSeries(key: .cpuTemperature, name: "Temperature", color: Palette.temperature)],
                         scale: .temperature, range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "CPU temperature"
+                        accessibilityName: "CPU temperature", unavailableReason: cpu.temperature.unavailableReason
                     )
                 }
             }
 
-            Card {
-                VStack(alignment: .leading, spacing: 12) {
-                    CardHeader(title: "Cores", subtitle: selectedCore == nil ? "Select a core to see its usage and temperature history" : nil) {
-                        InfoButton(label: "About core temperatures") {
-                            CoreMappingExplanation()
+            if !cpu.topology.cores.isEmpty {
+                Card {
+                    VStack(alignment: .leading, spacing: 12) {
+                        CardHeader(title: "Cores", subtitle: selectedCore == nil ? "Select a core to see its usage and temperature history" : nil) {
+                            InfoButton(label: "About core temperatures") {
+                                CoreMappingExplanation(cores: cpu.topology.cores)
+                            }
+                        }
+                        CoreMatrix(cpu: cpu, selected: selectedCore) { core in
+                            selectedIndex = selectedCore == core ? -1 : core.flatIndex
+                        }
+                        if let core = selectedCore {
+                            Divider()
+                            CoreInspector(
+                                core: core,
+                                clusterTitle: cpu.topology.cluster(core.cluster)?.title,
+                                usage: cpu.cores[core.flatIndex],
+                                temperature: cpu.coreTemperatures[core.flatIndex],
+                                sensorKey: coreSensorKeys[core.flatIndex],
+                                context: context,
+                                close: { selectedIndex = -1 }
+                            )
+                            .id(CoreInspector.scrollID)
                         }
                     }
-                    CoreMatrix(cpu: cpu, selected: selectedCore) { core in
-                        selectedIndex = selectedCore == core ? -1 : core.flatIndex
-                    }
-                    if let core = selectedCore {
-                        Divider()
-                        CoreInspector(
-                            core: core,
-                            usage: cpu.cores[core.flatIndex],
-                            temperature: cpu.coreTemperatures[core.flatIndex],
-                            sensorKey: core.flatIndex < coreSensorKeys.count ? coreSensorKeys[core.flatIndex] : nil,
-                            context: context,
-                            close: { selectedIndex = -1 }
-                        )
-                        .id(CoreInspector.scrollID)
+                }
+            } else {
+                Card {
+                    VStack(alignment: .leading, spacing: 6) {
+                        CardHeader(title: "Cores")
+                        Text("A reliable core layout isn’t available on this Mac. Total CPU usage is still shown above.")
+                            .font(.pmCaption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -111,15 +130,25 @@ struct CPUPage: View {
                 HistoryChart(
                     series: [ChartSeries(key: .cpuPower, name: "CPU Power", color: Palette.cpu, style: .lineAndArea)],
                     scale: .watts(minimumMax: 10), range: context.range, end: context.end, revision: context.revision,
-                    accessibilityName: "CPU power"
+                    accessibilityName: "CPU power", unavailableReason: cpu.power.unavailableReason
                 )
             }
         }
-        .modifier(RevealCoreInspector(selectedIndex: selectedIndex))
+        .modifier(RevealCoreInspector(selectedCore: selectedCore))
     }
 
     private var selectedCore: CoreID? {
-        (0..<CoreID.count).contains(selectedIndex) ? CoreID(flatIndex: selectedIndex) : nil
+        model.cpu.topology.core(atFlatIndex: selectedIndex)
+    }
+
+    private func usageLegend(_ series: ArraySlice<ChartSeries>) -> some View {
+        HStack(spacing: 10) {
+            ForEach(series) { item in
+                LegendKey(title: item.name, color: item.key == .cpuTotal ? item.color.opacity(0.35) : item.color,
+                          dash: item.dash)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func sourceTitle(_ source: TemperatureSource) -> String {
@@ -166,7 +195,7 @@ struct CoreMatrix: View {
     var body: some View {
         let cell = min(140, max(76, ((width - 5 * 8) / 6).rounded(.down)))
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(CoreCluster.allCases, id: \.self) { cluster in
+            ForEach(cpu.topology.clusters) { cluster in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 4) {
                         Text(cluster.title)
@@ -277,14 +306,14 @@ private struct WindowCoreCell: View {
 /// Closing the details, or opening the page with a remembered selection, doesn't scroll.
 /// The reader wraps the page's scroll view, so only its content moves, never the window.
 private struct RevealCoreInspector: ViewModifier {
-    let selectedIndex: Int
+    let selectedCore: CoreID?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         ScrollViewReader { proxy in
-            content.onChange(of: selectedIndex) { _, index in
-                guard (0..<CoreID.count).contains(index) else { return }
+            content.onChange(of: selectedCore) { _, core in
+                guard core != nil else { return }
                 let animation: Animation? = reduceMotion ? nil : .snappy(duration: 0.3)
                 // One main-actor turn later, so details inserted by this change are laid out.
                 Task { @MainActor in
@@ -302,6 +331,7 @@ private struct CoreInspector: View {
     static let scrollID = "coreInspector"
 
     let core: CoreID
+    let clusterTitle: String?
     let usage: MetricReading
     let temperature: MetricReading?
     /// Sensor matched to this core by the community table, if any.
@@ -317,9 +347,11 @@ private struct CoreInspector: View {
                 Text("Core \(core.label)")
                     .font(.pmCardTitle)
                     .accessibilityAddTraits(.isHeader)
-                Text(core.cluster.title)
-                    .font(.pmCaption)
-                    .foregroundStyle(.secondary)
+                if let clusterTitle {
+                    Text(clusterTitle)
+                        .font(.pmCaption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 8)
                 Button(action: close) {
                     Image(systemName: "xmark")
@@ -341,7 +373,7 @@ private struct CoreInspector: View {
                     HistoryChart(
                         series: [ChartSeries(key: .coreUsage(core), name: "\(core.label) Usage", color: Palette.cluster(core.cluster), style: .lineAndArea)],
                         scale: .percent, range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "\(core.label) usage"
+                        accessibilityName: "\(core.label) usage", unavailableReason: usage.unavailableReason
                     )
                     .frame(height: 120)
                     Text("Share of time this core was busy over each update.")
@@ -361,7 +393,7 @@ private struct CoreInspector: View {
                         HistoryChart(
                             series: [ChartSeries(key: .coreTemperature(core), name: "\(core.label) Temperature", color: Palette.temperature)],
                             scale: .temperature, range: context.range, end: context.end, revision: context.revision,
-                            accessibilityName: "Temperature near \(core.label)"
+                            accessibilityName: "Temperature near \(core.label)", unavailableReason: temperature?.unavailableReason
                         )
                         .frame(height: 120)
                         Text("Sensor \(sensorKey) · reads the area near \(core.label), not the core itself.")
@@ -410,6 +442,7 @@ private struct CoreInspector: View {
 
 private struct CoreMappingExplanation: View {
     @Environment(\.coreSensorKeys) private var keys
+    let cores: [CoreID]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -418,13 +451,12 @@ private struct CoreMappingExplanation: View {
             Text("Each core shows the sensor matched to it by a community-maintained table. Apple doesn't publish this mapping, so a value describes the area near a core rather than the core itself.")
                 .foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
-                ForEach(Array(stride(from: 0, to: CoreID.count, by: 3)), id: \.self) { start in
+                ForEach(Array(stride(from: 0, to: cores.count, by: 3)), id: \.self) { start in
                     GridRow {
-                        ForEach(start..<min(start + 3, CoreID.count), id: \.self) { index in
-                            let core = CoreID(flatIndex: index)
+                        ForEach(cores[start..<min(start + 3, cores.count)]) { core in
                             HStack(spacing: 4) {
                                 Text(core.label).foregroundStyle(.secondary)
-                                Text(index < keys.count ? keys[index] ?? "—" : "—").monospaced()
+                                Text(keys[core.flatIndex] ?? "—").monospaced()
                             }
                             .font(.system(size: 11))
                         }

@@ -3,30 +3,50 @@
 
 import Foundation
 
-/// Fixed storage for Mach's 18 × 4 counters. A sample allocates only its output
-/// vector, rather than a nested array and another delta array for every core.
+/// Reuse one baseline counter vector, sized from Mach rather than the chip name.
+/// Cluster values are produced only when the topology agrees with that vector.
 struct CPUUsageAccumulator {
     struct Value {
         let cores: [Double]
-        let sCore: Double
-        let pCore: Double
+        let eCore: Double?
+        let sCore: Double?
+        let pCore: Double?
         let total: Double
         let window: TimeInterval
     }
 
-    private var previous = [UInt32](repeating: 0, count: 72)
+    private let displayOrder: [CoreID]
+    private let eCount: Int
+    private let sCount: Int
+    private let pCount: Int
+    private var previous: [UInt32] = []
     private var previousTime: TimeInterval?
+
+    init(topology: CPUTopology) {
+        displayOrder = topology.cores.sorted { $0.machIndex < $1.machIndex }
+        eCount = topology.cluster(.e)?.count ?? 0
+        sCount = topology.cluster(.s)?.count ?? 0
+        pCount = topology.cluster(.p)?.count ?? 0
+    }
 
     mutating func reset() { previousTime = nil }
 
-    mutating func sample(_ ticks: UnsafeBufferPointer<Int32>, at time: TimeInterval) -> Value? {
-        guard ticks.count >= 72 else { reset(); return nil }
+    mutating func sample(_ ticks: UnsafeBufferPointer<Int32>, cpuCount: Int, at time: TimeInterval) -> Value? {
+        guard cpuCount > 0, cpuCount <= ticks.count / 4, ticks.count == cpuCount * 4 else {
+            reset()
+            return nil
+        }
+        if previous.count != ticks.count {
+            previous = [UInt32](repeating: 0, count: ticks.count)
+            reset()
+        }
         let elapsed = previousTime.map { time - $0 } ?? 0
         let hasBaseline = previousTime != nil && elapsed > 0
         previousTime = time
-        var cores = hasBaseline ? [Double](repeating: 0, count: 18) : []
-        var sSum = 0.0, pSum = 0.0
-        for cpu in 0..<18 {
+        let hasMapping = displayOrder.count == cpuCount
+        var cores = hasBaseline && hasMapping ? [Double](repeating: 0, count: cpuCount) : []
+        var eSum = 0.0, sSum = 0.0, pSum = 0.0, totalSum = 0.0
+        for cpu in 0..<cpuCount {
             var total: UInt64 = 0, idle: UInt64 = 0
             for state in 0..<4 {
                 let index = cpu * 4 + state
@@ -39,12 +59,22 @@ struct CPUUsageAccumulator {
             }
             guard hasBaseline else { continue }
             let percent = total > 0 ? 100 * Double(total - idle) / Double(total) : 0
-            // Verified against powermetrics: CPUs 12–17 are S; CPUs 0–11 are P.
-            if cpu >= 12 { cores[cpu - 12] = percent; sSum += percent }
-            else { cores[cpu + 6] = percent; pSum += percent }
+            totalSum += percent
+            if hasMapping {
+                let id = displayOrder[cpu]
+                cores[id.flatIndex] = percent
+                switch id.cluster {
+                case .e: eSum += percent
+                case .s: sSum += percent
+                case .p: pSum += percent
+                }
+            }
         }
         guard hasBaseline else { return nil }
-        return Value(cores: cores, sCore: sSum / 6, pCore: pSum / 12,
-                     total: (sSum + pSum) / 18, window: elapsed)
+        return Value(cores: cores,
+                     eCore: hasMapping && eCount > 0 ? eSum / Double(eCount) : nil,
+                     sCore: hasMapping && sCount > 0 ? sSum / Double(sCount) : nil,
+                     pCore: hasMapping && pCount > 0 ? pSum / Double(pCount) : nil,
+                     total: totalSum / Double(cpuCount), window: elapsed)
     }
 }

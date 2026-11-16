@@ -33,7 +33,7 @@ public final class NativeMetricProvider: MetricProvider {
 
     private let resources = NativeResources()
     private var opened: Set<SourceID> = []
-    private var cpuUsage = CPUUsageAccumulator()
+    private var cpuUsage: CPUUsageAccumulator
     private var previousMemory: (time: TimeInterval, ins: UInt64, outs: UInt64, swapIns: UInt64, swapOuts: UInt64)?
     private var reportNeedsRebuild = false
     private var lastThrottleEvidence: TimeInterval = -.infinity
@@ -57,26 +57,48 @@ public final class NativeMetricProvider: MetricProvider {
     public init(recordTimings: Bool = false) {
         self.recordTimings = recordTimings
         let chip = Self.sysctlString("machdep.cpu.brand_string") ?? "Apple Silicon"
-        machine = MachineInfo(chipName: chip, shortChipName: chip.replacingOccurrences(of: "Apple ", with: ""), gpuCoreCount: Self.gpuCoreCount(), physicalMemory: Double(ProcessInfo.processInfo.physicalMemory))
+        let topology = Self.discoverCPUTopology()
+        machine = MachineInfo(chipName: chip, shortChipName: chip.replacingOccurrences(of: "Apple ", with: ""),
+                              gpuCoreCount: Self.gpuCoreCount(), physicalMemory: Double(ProcessInfo.processInfo.physicalMemory),
+                              cpuTopology: topology)
+        cpuUsage = CPUUsageAccumulator(topology: topology)
         resources.smc = pm_smc_open()
         discoverSensors()
     }
 
     public func open(_ source: SourceID, at time: TimeInterval) -> OpenResult {
         if Self.reportSources.contains(source) {
-            guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else { return .failed(.unknownOSVersion) }
-            guard machine.chipName.contains("M5 Pro") else { return .failed(.unsupported) }
             if reportNeedsRebuild {
                 pm_report_close(resources.report)
                 resources.report = nil
                 reportNeedsRebuild = false
             }
-            if resources.report == nil { resources.report = pm_report_open() }
-            guard resources.report != nil else { return .failed(.transient) }
+            if resources.report == nil {
+                var roles: UInt32 = 0
+                for cluster in machine.cpuTopology.clusters {
+                    switch cluster.role {
+                    case .e: roles |= UInt32(PM_REPORT_CPU_FREQUENCY_E)
+                    case .s: roles |= UInt32(PM_REPORT_CPU_FREQUENCY_S)
+                    case .p: roles |= UInt32(PM_REPORT_CPU_FREQUENCY_P)
+                    }
+                }
+                resources.report = pm_report_open(roles)
+            }
+            guard let report = resources.report else { return .failed(.transient) }
+            let capabilities = pm_report_capabilities(report)
+            let required: UInt32
+            switch source {
+            case .cpuFrequency: required = UInt32(PM_REPORT_CPU_FREQUENCY_E | PM_REPORT_CPU_FREQUENCY_S | PM_REPORT_CPU_FREQUENCY_P)
+            case .gpuActivity: required = UInt32(PM_REPORT_GPU_ACTIVITY | PM_REPORT_GPU_FREQUENCY)
+            case .energy: required = UInt32(PM_REPORT_CPU_POWER | PM_REPORT_GPU_POWER | PM_REPORT_ANE_POWER)
+            default: required = 0
+            }
+            guard capabilities & required != 0 else { return .failed(.unsupported) }
         }
         if source == .sensors {
             if resources.smc == nil { resources.smc = pm_smc_open() }
             guard resources.smc != nil else { return .failed(.transient) }
+            if sensors.isEmpty { discoverSensors() }
         }
         if source == .battery {
             if resources.battery == 0 { resources.battery = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery")) }
@@ -163,14 +185,21 @@ public final class NativeMetricProvider: MetricProvider {
         let result = host_processor_info(resources.host, PROCESSOR_CPU_LOAD_INFO, &cpuCount, &data, &dataCount)
         guard result == KERN_SUCCESS, let data else { return .failed(.transient) }
         defer { vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: data)), vm_size_t(dataCount) * vm_size_t(MemoryLayout<integer_t>.stride)) }
-        guard machine.chipName.contains("M5 Pro"), cpuCount == 18, dataCount >= 18 * 4 else { return .failed(.unsupported) }
+        guard cpuCount > 0, Int(dataCount) == Int(cpuCount) * 4 else { return .failed(.transient) }
         let time = ProcessInfo.processInfo.systemUptime
-        guard let usage = cpuUsage.sample(UnsafeBufferPointer(start: data, count: Int(dataCount)), at: time) else { return .noNewData }
-        var values: [MetricKey: Double] = [:]
-        values.reserveCapacity(21)
-        values[.cpuTotal] = usage.total; values[.cpuS] = usage.sCore; values[.cpuP] = usage.pCore
+        guard let usage = cpuUsage.sample(UnsafeBufferPointer(start: data, count: Int(dataCount)), cpuCount: Int(cpuCount), at: time) else { return .noNewData }
+        var values: [MetricKey: Double] = [.cpuTotal: usage.total]
+        var unsupported: Set<MetricKey> = []
+        values.reserveCapacity(4 + usage.cores.count)
+        if let e = usage.eCore { values[.cpuE] = e } else { unsupported.insert(.cpuE) }
+        if let s = usage.sCore { values[.cpuS] = s } else { unsupported.insert(.cpuS) }
+        if let p = usage.pCore { values[.cpuP] = p } else { unsupported.insert(.cpuP) }
+        if usage.cores.isEmpty {
+            unsupported.formUnion(machine.cpuTopology.cores.map { .core($0.flatIndex) })
+        }
         for (index, value) in usage.cores.enumerated() { values[.core(index)] = value }
-        return .measured(values, window: usage.window)
+        return unsupported.isEmpty ? .measured(values, window: usage.window)
+            : .measuredPartial(values, window: usage.window, unsupported: unsupported)
     }
 
     private func sampleReport(_ job: JobID) -> SampleOutcome {
@@ -183,30 +212,37 @@ public final class NativeMetricProvider: MetricProvider {
         }
         guard result > 0 else { return .noNewData }
         if sample.cpu_throttle_active > 0 { lastThrottleEvidence = ProcessInfo.processInfo.systemUptime }
-        if sample.valid & 32 != 0 {
+        if sample.valid & UInt32(PM_REPORT_GPU_THROTTLE) != 0 {
             let now = ProcessInfo.processInfo.systemUptime
             lastGPUThrottleSample = now
             gpuThrottleValidity = max(6, 3 * sample.elapsed_seconds)
             if sample.gpu_throttle_active > 0 { lastGPUThrottleEvidence = now }
         }
-        let values: [MetricKey: Double]
+        let capabilities = pm_report_capabilities(report)
+        let metrics: [(MetricKey, Int, Double)]
         switch job {
         case .cpuFrequency:
-            guard sample.valid & 8 != 0 else { return .failed(.transient) }
-            values = [.cpuFrequencyS: sample.s_ghz, .cpuFrequencyP: sample.p_ghz]
+            metrics = [(.cpuFrequencyE, PM_REPORT_CPU_FREQUENCY_E, sample.e_ghz),
+                       (.cpuFrequencyS, PM_REPORT_CPU_FREQUENCY_S, sample.s_ghz),
+                       (.cpuFrequencyP, PM_REPORT_CPU_FREQUENCY_P, sample.p_ghz)]
         case .energy:
-            var power: [MetricKey: Double] = [:]
-            if sample.valid & 1 != 0 { power[.cpuPower] = sample.cpu_watts }
-            if sample.valid & 2 != 0 { power[.gpuPower] = sample.gpu_watts }
-            if sample.valid & 4 != 0 { power[.anePower] = sample.ane_watts }
-            guard !power.isEmpty else { return .failed(.transient) }
-            values = power
+            metrics = [(.cpuPower, PM_REPORT_CPU_POWER, sample.cpu_watts),
+                       (.gpuPower, PM_REPORT_GPU_POWER, sample.gpu_watts),
+                       (.anePower, PM_REPORT_ANE_POWER, sample.ane_watts)]
         case .gpuActivity:
-            guard sample.valid & 16 != 0 else { return .failed(.transient) }
-            values = [.gpuUsage: sample.gpu_percent, .gpuFrequency: sample.gpu_ghz]
+            metrics = [(.gpuUsage, PM_REPORT_GPU_ACTIVITY, sample.gpu_percent),
+                       (.gpuFrequency, PM_REPORT_GPU_FREQUENCY, sample.gpu_ghz)]
         default: return .failed(.unsupported)
         }
-        return .measured(values, window: sample.elapsed_seconds)
+        var values: [MetricKey: Double] = [:]
+        var unsupported: Set<MetricKey> = []
+        for (key, bit, value) in metrics {
+            let flag = UInt32(bit)
+            if sample.valid & flag != 0 { values[key] = value }
+            else if capabilities & flag == 0 || sample.unavailable & flag != 0 { unsupported.insert(key) }
+        }
+        guard !values.isEmpty || unsupported.count == metrics.count else { return .failed(.transient) }
+        return .measuredPartial(values, window: sample.elapsed_seconds, unsupported: unsupported)
     }
 
     private func sampleMemory() -> SampleOutcome {
@@ -344,21 +380,8 @@ public final class NativeMetricProvider: MetricProvider {
 
     private func discoverSensors() {
         guard let smc = resources.smc else { return }
-        // Hardware names must not inherit invented sensors or older-chip aliases from
-        // the design fixtures. Unmapped keys keep their actual hardware identifier.
-        var known: [String: SensorInfo] = [:]
-        if machine.chipName.contains("M5 Pro") {
-            let sKeys = ["Tp00", "Tp04", "Tp08", "Tp0C", "Tp0G", "Tp0K"]
-            let pKeys = ["Tp0O", "Tp0R", "Tp0U", "Tp0X", "Tp0a", "Tp0d", "Tp0g", "Tp0j", "Tp0m", "Tp0p", "Tp0u", "Tp0y"]
-            for (index, key) in (sKeys + pKeys).enumerated() {
-                let core = CoreID(flatIndex: index)
-                known[key] = SensorInfo(id: key, name: "\(core.cluster.title) \(core.index) Temperature", category: .cpu, mappedCore: core)
-            }
-        }
-        let gpuKeys = ["Tg0U", "Tg0X", "Tg0d", "Tg0g", "Tg0j", "Tg1Y", "Tg1c", "Tg1g"]
-        if machine.chipName.contains("M5 Pro") {
-            for (index,key) in gpuKeys.enumerated() { known[key] = SensorInfo(id: key, name: "GPU Sensor \(index + 1)", category: .gpu) }
-        }
+        // The catalog only labels actual keys exposed by this hardware.
+        let known = ThermalSensorCatalog.sensors(for: machine)
         var found: [SensorInfo] = []
         for index in 0..<pm_smc_key_count(smc) {
             var bytes = [CChar](repeating: 0, count: 5)
@@ -380,6 +403,43 @@ public final class NativeMetricProvider: MetricProvider {
         var data = [CChar](repeating: 0, count: size)
         guard sysctlbyname(name, &data, &size, nil, 0) == 0 else { return nil }
         return decodeCString(data)
+    }
+
+    private static func cpuSysctlCount(_ name: String) -> Int? {
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname(name, &value, &size, nil, 0) == 0, size == MemoryLayout<Int32>.size,
+              value > 0 else { return nil }
+        return Int(value)
+    }
+
+    private static func discoverCPUTopology() -> CPUTopology {
+        let total = cpuSysctlCount("hw.logicalcpu_max") ?? ProcessInfo.processInfo.processorCount
+        let fallback = CPUTopology(logicalCPUCount: total)
+        guard let tierCount = cpuSysctlCount("hw.nperflevels"), tierCount <= CoreCluster.allCases.count else { return fallback }
+        var levels: [(name: String?, count: Int)] = []
+        for level in 0..<tierCount {
+            let key = "hw.perflevel\(level)"
+            guard let count = cpuSysctlCount("\(key).logicalcpu_max") ?? cpuSysctlCount("\(key).logicalcpu") else { return fallback }
+            levels.append((sysctlString("\(key).name"), count))
+        }
+        // These IDs describe the kernel slots; device-tree traversal order by
+        // itself does not tell us which index Mach uses for a particular tier.
+        let node = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/cpus")
+        guard node != 0 else { return fallback }
+        defer { IOObjectRelease(node) }
+        var iterator: io_iterator_t = 0
+        guard IORegistryEntryGetChildIterator(node, kIODeviceTreePlane, &iterator) == KERN_SUCCESS else { return fallback }
+        defer { IOObjectRelease(iterator) }
+        var seen: [Int: String] = [:]
+        while case let child = IOIteratorNext(iterator), child != 0 {
+            defer { IOObjectRelease(child) }
+            guard let number = IORegistryEntryCreateCFProperty(child, "logical-cpu-id" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? NSNumber,
+                  let raw = IORegistryEntryCreateCFProperty(child, "cluster-type" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? Data else { continue }
+            let tag = String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
+            guard seen.updateValue(tag, forKey: number.intValue) == nil else { return fallback }
+        }
+        return CPUTopology(logicalCPUCount: total, performanceLevels: levels, firmwareTypes: seen)
     }
 
     private static func decodeCString(_ data: [CChar]) -> String {

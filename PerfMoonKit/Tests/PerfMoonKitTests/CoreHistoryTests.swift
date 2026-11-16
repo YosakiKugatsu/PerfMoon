@@ -124,7 +124,7 @@ struct CoreHistoryTests {
         advance(visible, until: 1040)
         #expect(background.sampleCount == visible.sampleCount)
         #expect(background.intervals == visible.intervals)
-        for key in SeriesKey.allCases where !key.isPerCore {
+        for key in SeriesKey.aggregateKeys {
             #expect(background.history.samples(key, since: 0) == visible.history.samples(key, since: 0))
         }
         background.setDemand(.popover, active: true, now: 1040)
@@ -137,7 +137,8 @@ struct CoreHistoryTests {
         #expect(background.history.last(.gpuPower)?.time == 1050)
         // Pause/failure breaks must not allocate absent series.
         background.setUserPaused(true, now: 1051)
-        #expect(SeriesKey.allCases.filter(\.isPerCore).allSatisfy { background.history.series($0) == nil })
+        let backgroundCoreSeries = background.history.recordedKeys.filter(\.isPerCore)
+        #expect(backgroundCoreSeries.isEmpty)
     }
 
     @Test("Main-window visibility releases buffers and reopening starts new history")
@@ -158,7 +159,8 @@ struct CoreHistoryTests {
         advance(core, until: 1030)
         #expect(core.history.count(.coreUsage(CoreID(flatIndex: 0))) == pausedCount)
         core.discardCoreHistory()
-        #expect(SeriesKey.allCases.filter(\.isPerCore).allSatisfy { core.history.series($0) == nil })
+        let remainingCoreSeries = core.history.recordedKeys.filter(\.isPerCore)
+        #expect(remainingCoreSeries.isEmpty)
         advance(core, until: 1040)
         core.setDemand(.coreHistory, active: true, now: 1041)
         advance(core, until: 1044)

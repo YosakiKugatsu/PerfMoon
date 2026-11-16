@@ -1,6 +1,6 @@
 Stats
 https://github.com/exelban/stats
-Reference: read-only AppleSMC protocol and M5 sensor IDs; memory accounting.
+Reference: read-only AppleSMC protocol, Apple silicon temperature sensor keys, and memory accounting.
 
 MIT License
 

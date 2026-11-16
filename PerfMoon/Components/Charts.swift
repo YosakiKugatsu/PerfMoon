@@ -18,12 +18,45 @@ struct ChartSeries: Identifiable {
     let name: String
     let color: Color
     var style: Style = .line
-    /// Always dashed, for a series that shares its color with another (P-Core beside S-Core).
-    var dashed = false
-    /// Dashed when Differentiate Without Color is on.
-    var dashedForAccessibility = false
+    /// Distinct line patterns identify CPU tiers without relying on color.
+    var dash: [CGFloat] = []
 
     var id: String { key.rawValue }
+}
+
+extension CPUSnapshot {
+    var usageChartSeries: [ChartSeries] {
+        [ChartSeries(key: .cpuTotal, name: "Total", color: Palette.cpu, style: .area)] + topology.clusters.map { cluster in
+            ChartSeries(key: cluster.role.usageSeries, name: cluster.title, color: Palette.cluster(cluster.role),
+                        dash: cluster.role.usageDash)
+        }
+    }
+}
+
+extension CoreCluster {
+    var usageSeries: SeriesKey {
+        switch self {
+        case .e: .cpuE
+        case .s: .cpuS
+        case .p: .cpuP
+        }
+    }
+
+    var frequencySeries: SeriesKey {
+        switch self {
+        case .e: .cpuFrequencyE
+        case .s: .cpuFrequencyS
+        case .p: .cpuFrequencyP
+        }
+    }
+
+    var usageDash: [CGFloat] {
+        switch self {
+        case .e: [1, 4]
+        case .s: []
+        case .p: [4, 3]
+        }
+    }
 }
 
 enum ChartScale {
@@ -53,10 +86,10 @@ struct HistoryChart: View {
     let revision: Int
     var compact = false
     let accessibilityName: String
+    var unavailableReason: UnavailableReason? = nil
 
     @Environment(\.historyStore) private var history
     @Environment(\.temperatureUnit) private var unit
-    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.monitorPaused) private var paused
 
@@ -64,6 +97,8 @@ struct HistoryChart: View {
         let start = end - range.seconds
         let plotted = series.map { history?.points($0.key, start: start, end: end) ?? [] }
         let domain = yDomain(plotted.flatMap { $0 })
+        let empty = plotted.allSatisfy(\.isEmpty)
+        let emptyMessage = unavailableReason?.message ?? "No data yet"
         Canvas { context, size in
             let rect = CGRect(x: 0, y: compact ? 1 : 5,
                               width: max(1, size.width - (compact ? 0 : 57)),
@@ -97,19 +132,24 @@ struct HistoryChart: View {
                     if definition.style != .area {
                         plot.stroke(line, with: .color(definition.color), style: StrokeStyle(
                             lineWidth: contrast == .increased ? 2 : 1.5, lineCap: .round, lineJoin: .round,
-                            dash: definition.dashed || (definition.dashedForAccessibility && differentiateWithoutColor) ? [4, 3] : []))
+                            dash: definition.dash))
                     }
                 }
             }
         }
         .opacity(paused ? 0.7 : 1)
         .overlay {
-            if plotted.allSatisfy(\.isEmpty) {
-                Text("No data yet").font(.pmCaption).foregroundStyle(.tertiary)
+            if empty {
+                Text(emptyMessage)
+                    .font(.pmCaption)
+                    .foregroundStyle(unavailableReason == nil ? .tertiary : .secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 8)
             }
         }
         .transaction { $0.animation = nil }
         .accessibilityLabel("\(accessibilityName), last \(range.spokenTitle)")
+        .accessibilityValue(empty ? emptyMessage : "")
         .accessibilityChartDescriptor(HistoryAccessibility(
             title: accessibilityName, series: series.map(\.name), points: plotted,
             start: start, end: end, domain: domain, valueDescription: yLabel))

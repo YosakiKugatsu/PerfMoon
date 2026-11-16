@@ -24,6 +24,7 @@ struct MainView: View {
     let actions: MainActions
 
     @Environment(\.isLiveData) private var isLiveData
+    @State private var pageWidth: CGFloat = 800
 
     var body: some View {
         NavigationSplitView {
@@ -36,6 +37,7 @@ struct MainView: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
         } detail: {
             detail
+                .onGeometryChange(for: CGFloat.self) { max(0, $0.size.width - PageMetrics.totalHorizontalPadding) } action: { pageWidth = $0 }
                 .navigationTitle(settings.selectedPage.title)
                 .navigationSubtitle(subtitle)
                 .toolbar { toolbar }
@@ -69,13 +71,13 @@ struct MainView: View {
     private var detail: some View {
         switch settings.selectedPage {
         case .overview:
-            OverviewPage(model: model, context: context, machine: machine) { settings.selectedPage = $0 }
+            OverviewPage(model: model, context: context, machine: machine, width: pageWidth) { settings.selectedPage = $0 }
         case .cpu:
             CPUPage(model: model, context: context, openSensorSettings: { actions.openSettings(.cpu) }, settings: settings)
         case .gpu:
             GPUPage(model: model, context: context)
         case .memory:
-            MemoryPage(model: model, context: context, setProcessListVisible: actions.setMemoryProcessListVisible)
+            MemoryPage(model: model, context: context, width: pageWidth, setProcessListVisible: actions.setMemoryProcessListVisible)
         case .disk:
             DiskPage(model: model)
         case .power:
@@ -135,19 +137,23 @@ extension Page {
 
 // MARK: - Page scaffolding
 
-/// Scrolling page with 20 pt margins that reports its usable width.
+/// Shared padding also determines the width reported to adaptive detail pages.
+private enum PageMetrics {
+    static let padding: CGFloat = 20
+    static let totalHorizontalPadding = padding * 2
+}
+
+/// Defer charts and tables below the viewport when changing the sidebar selection.
 struct PageScroll<Content: View>: View {
-    @Binding var width: CGFloat
     @ViewBuilder var content: Content
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 content
             }
-            .padding(20)
+            .padding(PageMetrics.padding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width - 40 } action: { width = $0 }
         }
     }
 }

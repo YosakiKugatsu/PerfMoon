@@ -9,16 +9,15 @@ struct OverviewPage: View {
     let model: DashboardModel
     let context: ChartContext
     let machine: MachineInfo
+    let width: CGFloat
     let navigate: (Page) -> Void
-
-    @State private var width: CGFloat = 800
 
     private var columns: Int { width >= 760 ? 3 : 2 }
 
     var body: some View {
         let spacing: CGFloat = 12
         let column = max(0, ((width - spacing * CGFloat(columns - 1)) / CGFloat(columns)).rounded(.down))
-        PageScroll(width: $width) {
+        PageScroll {
             if columns == 3 {
                 EqualHeightRow(spacing: spacing) {
                     cpuCard.frame(width: column)
@@ -43,31 +42,38 @@ struct OverviewPage: View {
         let cpu = model.cpu
         return OverviewCard(title: "CPU", page: .cpu, navigate: navigate) {
             ThrottleBadge(status: cpu.throttle)
-            SourceTemperatureLabel(reading: cpu.temperature, source: cpu.temperatureSource)
+            OverviewMetricValue(reading: cpu.temperature) {
+                SourceTemperatureLabel(reading: cpu.temperature, source: cpu.temperatureSource)
+            }
         } content: {
             HStack(alignment: .firstTextBaseline) {
                 ReadingText.percent(cpu.total, font: .pmCardNumber)
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 2) {
-                    LegendValue(title: "S-Core", color: Palette.sCore, reading: cpu.sCore)
-                    LegendValue(title: "P-Core", color: Palette.pCore, reading: cpu.pCore, dashed: true)
+                    ForEach(cpu.topology.clusters) { cluster in
+                        LegendValue(title: cluster.title, color: Palette.cluster(cluster.role), reading: cpu.usage(cluster.role),
+                                    dash: cluster.role.usageDash)
+                    }
                 }
             }
             HistoryChart(
-                series: [
-                    ChartSeries(key: .cpuTotal, name: "Total", color: Palette.cpu, style: .area),
-                    ChartSeries(key: .cpuS, name: "S-Core", color: Palette.sCore),
-                    ChartSeries(key: .cpuP, name: "P-Core", color: Palette.pCore, dashed: true),
-                ],
+                series: cpu.usageChartSeries,
                 scale: .percent, range: context.range, end: context.end, revision: context.revision,
-                compact: true, accessibilityName: "CPU usage"
+                compact: true, accessibilityName: "CPU usage", unavailableReason: cpu.total.unavailableReason
             )
             .frame(height: 84)
             VStack(spacing: 4) {
-                ValueRow(label: "CPU Power") { ReadingText.watts(cpu.power) }
-                ValueRow(label: "Frequency") {
-                    FrequencyPair(s: cpu.sFrequency, p: cpu.pFrequency)
-                        .layoutPriority(1)
+                ValueRow(label: "CPU Power") {
+                    OverviewMetricValue(reading: cpu.power) { ReadingText.watts(cpu.power) }
+                }
+                if let first = cpu.topology.clusters.first {
+                    ValueRow(label: "Frequency") {
+                        if cpu.topology.clusters.allSatisfy({ cpu.frequency($0.role).unavailableReason != nil }) {
+                            ReasonCaption(reading: cpu.frequency(first.role))
+                        } else {
+                            ClusterFrequencies(cpu: cpu).layoutPriority(1)
+                        }
+                    }
                 }
             }
         }
@@ -76,7 +82,9 @@ struct OverviewPage: View {
     private var gpuCard: some View {
         let gpu = model.gpu
         return OverviewCard(title: "GPU & ANE", page: .gpu, navigate: navigate) {
-            TemperatureText(reading: gpu.temperature).help("Highest GPU temperature")
+            OverviewMetricValue(reading: gpu.temperature) {
+                TemperatureText(reading: gpu.temperature).help("Highest GPU temperature")
+            }
         } content: {
             HStack(alignment: .firstTextBaseline) {
                 ReadingText.percent(gpu.usage, font: .pmCardNumber)
@@ -85,19 +93,23 @@ struct OverviewPage: View {
                     Text("Frequency")
                         .font(.pmCaption)
                         .foregroundStyle(.secondary)
-                    ReadingText.frequency(gpu.frequency, emphasis: .primary)
+                    OverviewMetricValue(reading: gpu.frequency) {
+                        ReadingText.frequency(gpu.frequency, emphasis: .primary)
+                    }
                 }
                 .accessibilityElement(children: .combine)
             }
             HistoryChart(
                 series: [ChartSeries(key: .gpuUsage, name: "GPU", color: Palette.gpu, style: .lineAndArea)],
                 scale: .percent, range: context.range, end: context.end, revision: context.revision,
-                compact: true, accessibilityName: "GPU usage"
+                compact: true, accessibilityName: "GPU usage", unavailableReason: gpu.usage.unavailableReason
             )
             .frame(height: 84)
             VStack(spacing: 4) {
-                ValueRow(label: "GPU Power") { ReadingText.watts(gpu.power) }
-                ValueRow(label: "ANE Power", dot: Palette.ane) { ReadingText.watts(gpu.anePower) }
+                ValueRow(label: "GPU Power") { OverviewMetricValue(reading: gpu.power) { ReadingText.watts(gpu.power) } }
+                ValueRow(label: "ANE Power", dot: Palette.ane) {
+                    OverviewMetricValue(reading: gpu.anePower) { ReadingText.watts(gpu.anePower) }
+                }
             }
         }
     }
@@ -206,6 +218,21 @@ struct OverviewPage: View {
 
 // MARK: - Overview parts
 
+/// Compact cards have room for a reason in place of an unavailable value.
+private struct OverviewMetricValue<Value: View>: View {
+    let reading: MetricReading
+    @ViewBuilder var value: Value
+
+    var body: some View {
+        if reading.unavailableReason == nil {
+            value
+        } else {
+            ReasonCaption(reading: reading)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+}
+
 /// A row whose cards share the tallest card's height.
 struct EqualHeightRow<Content: View>: View {
     var spacing: CGFloat = 12
@@ -255,11 +282,11 @@ private struct LegendValue: View {
     let title: String
     let color: Color
     let reading: MetricReading
-    var dashed = false
+    var dash: [CGFloat] = []
 
     var body: some View {
         HStack(spacing: 6) {
-            LegendKey(title: title, color: color, dashed: dashed)
+            LegendKey(title: title, color: color, dash: dash)
             ReadingText.percent(reading, font: .pmCaptionNumber)
                 .frame(minWidth: 30, alignment: .trailing)
         }

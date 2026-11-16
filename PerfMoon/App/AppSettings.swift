@@ -22,6 +22,7 @@ final class AppSettings {
     @ObservationIgnored var onChange: ((Change) -> Void)?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let hadPreviousLaunch: Bool
+    @ObservationIgnored private var pageWrite: Task<Void, Never>?
     var isLiveData = false
 
     var updateInterval: UpdateInterval {
@@ -60,7 +61,7 @@ final class AppSettings {
     var selectedPage: Page {
         didSet {
             guard selectedPage != oldValue else { return }
-            save(selectedPage.rawValue, "selectedPage")
+            schedulePageWrite()
             onChange?(.page)
         }
     }
@@ -85,6 +86,28 @@ final class AppSettings {
 
     private func save(_ value: Any, _ key: String) {
         defaults.set(value, forKey: key)
+    }
+
+    private func schedulePageWrite() {
+        pageWrite?.cancel()
+        pageWrite = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+                try Task.checkCancellation()
+            } catch {
+                return
+            }
+            self?.persistSelectedPage()
+        }
+    }
+
+    func persistSelectedPage() {
+        guard pageWrite != nil else { return }
+        pageWrite?.cancel()
+        pageWrite = nil
+        if defaults.string(forKey: "selectedPage") != selectedPage.rawValue {
+            save(selectedPage.rawValue, "selectedPage")
+        }
     }
 
     /// Show the window once for a fresh install. Existing configured installations

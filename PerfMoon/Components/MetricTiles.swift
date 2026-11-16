@@ -254,6 +254,7 @@ struct PanelSparkline: View {
     let end: TimeInterval
     let revision: Int
     var showsScale = true
+    var unavailableReason: UnavailableReason? = nil
 
     @Environment(\.historyStore) private var history
     @Environment(\.temperatureUnit) private var unit
@@ -268,7 +269,9 @@ struct PanelSparkline: View {
                       domain: domain ?? 0...1, samples: samples)
                 .overlay {
                     if values.isEmpty {
-                        Text("No data yet").font(.pmCaption).foregroundStyle(.tertiary)
+                        Text(unavailableReason?.message ?? "No data yet")
+                            .font(.pmCaption)
+                            .foregroundStyle(unavailableReason == nil ? .tertiary : .secondary)
                     }
                 }
             if showsScale {
@@ -290,7 +293,7 @@ struct PanelSparkline: View {
     }
 
     private func spokenRange(_ values: [Double]) -> String {
-        guard let low = values.min(), let high = values.max() else { return "No data yet" }
+        guard let low = values.min(), let high = values.max() else { return unavailableReason?.message ?? "No data yet" }
         return "Low \(scale.spoken(low, unit: unit)), high \(scale.spoken(high, unit: unit))"
     }
 }

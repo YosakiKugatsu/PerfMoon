@@ -80,9 +80,9 @@ public final class MonitorEngine {
     }
 
     public func refreshDiskVolumes() {
-        guard isLive, core.isCollecting, core.intervals[.disk] != nil else { return }
-        core.refresh(.disk, now: Self.now)
-        reschedule()
+        guard isLive else { return }
+        core.diskVolumesDidChange(now: Self.now)
+        if core.isCollecting, core.intervals[.disk] != nil { reschedule() }
     }
 
     public func refreshThermalStatus() {
@@ -124,6 +124,15 @@ public final class MonitorEngine {
         guard core.demands.contains(demand) != active else { return }
         core.setDemand(demand, active: active, now: Self.now)
         changed()
+    }
+
+    public func setWindowPage(from old: Page?, to new: Page?) {
+        guard old != new else { return }
+        let wake = core.nextWakeTime()
+        core.setWindowPage(from: old, to: new, now: Self.now)
+        // The selection already redraws the view. Publishing a new snapshot
+        // here advances every chart's time window without collecting a sample.
+        if core.nextWakeTime() != wake { reschedule() }
     }
 
     public func setUserInterval(_ interval: UpdateInterval) {

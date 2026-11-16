@@ -135,6 +135,27 @@ struct MonitorCoreTests {
         #expect(core.reading(.pageIns).status == .valid)
     }
 
+    @Test("Switching pages preserves due CPU samples and history shared by both pages")
+    func sharedCPUCadenceSurvivesNavigation() {
+        let (core, _) = makeCore()
+        core.setWindowPage(from: nil, to: .overview, now: 1000)
+        run(core, until: 1002)
+        let historyBefore = core.history.count(.cpuTotal)
+        var page = Page.overview
+        for flip in 0..<20 {
+            let next: Page = page == .overview ? .cpu : .overview
+            let due = core.nextDue[.cpuActivity]
+            let time = 1003.002 + Double(flip) * 0.049
+            core.setWindowPage(from: page, to: next, now: time)
+            #expect(core.nextDue[.cpuActivity] == due)
+            #expect(core.reading(.cpuTotal).status == .valid)
+            core.tick(now: time)
+            page = next
+        }
+        #expect(core.history.count(.cpuTotal) > historyBefore)
+        #expect(core.demands == [.window(page)])
+    }
+
     @Test("Pause stops all sampling and the run loop; history breaks at the pause")
     func pauseStopsCollection() {
         let (core, _) = makeCore()

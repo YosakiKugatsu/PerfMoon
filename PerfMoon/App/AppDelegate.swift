@@ -22,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.launch()
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        model?.settings.persistSelectedPage()
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { model?.openMainWindow(page: nil) }
         return true

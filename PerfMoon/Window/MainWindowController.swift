@@ -106,7 +106,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         } else {
             if let observer { app.engine.removeObserver(observer) }
             observer = nil
-            if let demandedPage { app.engine.setDemand(.window(demandedPage), active: false) }
+            app.engine.setWindowPage(from: demandedPage, to: nil)
             demandedPage = nil
         }
     }
@@ -115,9 +115,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         updateProcessDemand()
         let page = app.settings.selectedPage
         guard page != demandedPage else { return }
-        if let demandedPage { app.engine.setDemand(.window(demandedPage), active: false) }
+        let previousPage = demandedPage
         demandedPage = page
-        app.engine.setDemand(.window(page), active: true)
+        app.engine.setWindowPage(from: previousPage, to: page)
     }
 
     func windowDidChangeOcclusionState(_ notification: Notification) { updateLiveness() }
@@ -132,7 +132,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         if isLive {
             if let observer { app.engine.removeObserver(observer) }
             observer = nil
-            if let demandedPage { app.engine.setDemand(.window(demandedPage), active: false) }
+            app.engine.setWindowPage(from: demandedPage, to: nil)
             demandedPage = nil
             isLive = false
         }

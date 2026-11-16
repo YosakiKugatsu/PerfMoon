@@ -72,12 +72,14 @@ public final class MonitorCore {
     private var cpuSensorIDs: [String] = []
     private var gpuSensorIDs: [String] = []
     private var mappedSensorIDs: [CoreID: String] = [:]
+    private var cpuActivityKeys: [MetricKey] = []
     private var lastTemperatureRequest: [String] = []
     private var processSnapshotIsFresh = false
     private var diskDrives: [DiskDriveSnapshot] = []
     private var diskSampleInFlight = false
     private var diskGeneration = 0
     private var diskRefreshPending = false
+    private var lastDiskReadStarted: TimeInterval?
     var onDiskSample: (@MainActor () -> Void)?
 
     public static let dueTolerance: TimeInterval = 0.005
@@ -102,9 +104,7 @@ public final class MonitorCore {
 
     public func mappedSensor(for core: CoreID) -> String? { mappedSensorIDs[core] }
 
-    /// Clears all collected state. Used when a fixture scenario is applied.
-    public func resetState() {
-        for source in SourceID.allCases { provider.close(source) }
+    private func refreshSensorIndex() {
         sensorIndex = Dictionary(uniqueKeysWithValues: provider.sensors.map { ($0.id, $0) })
         cpuSensorIDs = provider.sensors.filter { $0.category == .cpu }.map(\.id)
         gpuSensorIDs = provider.sensors.filter { $0.category == .gpu }.map(\.id)
@@ -112,6 +112,17 @@ public final class MonitorCore {
         for sensor in provider.sensors {
             if let core = sensor.mappedCore { mappedSensorIDs[core] = sensor.id }
         }
+    }
+
+    private func metricKeys(_ job: JobID) -> [MetricKey] {
+        job == .cpuActivity ? cpuActivityKeys : job.keys
+    }
+
+    /// Clears all collected state. Used when a fixture scenario is applied.
+    public func resetState() {
+        for source in SourceID.allCases { provider.close(source) }
+        refreshSensorIndex()
+        cpuActivityKeys = JobID.cpuActivity.keys + machine.cpuTopology.cores.map { .core($0.flatIndex) }
         readings = [:]
         diskDrives = []
         invalidateDiskSample()
@@ -121,7 +132,7 @@ public final class MonitorCore {
         sources = Dictionary(uniqueKeysWithValues: SourceID.allCases.map { ($0, SourceRuntime()) })
         nextDue = [:]
         for job in JobID.allCases {
-            for key in job.keys {
+            for key in metricKeys(job) {
                 readings[key] = .pending(key.unit, source: job.source, quality: key.quality)
             }
         }
@@ -144,6 +155,11 @@ public final class MonitorCore {
         nextDue[job] = now
     }
 
+    func diskVolumesDidChange(now: TimeInterval) {
+        invalidateDiskSample()
+        refresh(.disk, now: now)
+    }
+
     public func start(now: TimeInterval) {
         guard !started else { return }
         started = true
@@ -162,7 +178,7 @@ public final class MonitorCore {
         guard changed else { return }
         if demand == .performancePage, active { selfSampler.reset() }
         if demand == .coreHistory, !active {
-            for key in SeriesKey.allCases where key.isPerCore { history.markBreak(key) }
+            history.markBreakPerCore()
             historyRevision += 1
         }
         if demand == .memoryProcesses || demand == .windowMemoryProcesses {
@@ -179,8 +195,17 @@ public final class MonitorCore {
     }
 
     public func discardCoreHistory() {
-        for key in SeriesKey.allCases where key.isPerCore { history.remove(key) }
+        history.removePerCore()
         historyRevision += 1
+    }
+
+    /// Replace a window page's demand in one scheduling pass so jobs shared
+    /// by both pages retain their due times.
+    public func setWindowPage(from old: Page?, to new: Page?, now: TimeInterval) {
+        guard old != new else { return }
+        if let old { demands.remove(.window(old)) }
+        if let new { demands.insert(.window(new)) }
+        replan(now: now)
     }
 
     /// A source change starts a new temperature series; the old one is discarded, never relabeled.
@@ -275,6 +300,9 @@ public final class MonitorCore {
                 if interval < previous {
                     nextDue[job] = alignedNext(after: now, interval: interval)
                 }
+            } else if job == .disk, let lastDiskReadStarted {
+                // Returning to an already sampled Overview should not launch diskutil again.
+                nextDue[job] = max(now, lastDiskReadStarted + interval)
             } else {
                 nextDue[job] = now
             }
@@ -283,10 +311,13 @@ public final class MonitorCore {
             nextDue[job] = nil
         }
         if intervals[.disk] != nil && planned[.disk] == nil {
-            invalidateDiskSample()
-            provider.close(.disk)
-            sources[.disk]?.phase = .idle
-            sources[.disk]?.lastUpdated = nil
+            diskRefreshPending = false
+            // Read-only disk inspection can finish into the cache when the user
+            // leaves the page. Failures do not poll in the background.
+            if case .recovering = sources[.disk]?.phase {
+                provider.close(.disk)
+                sources[.disk]?.phase = .idle
+            }
         }
         intervals = planned
 
@@ -356,7 +387,7 @@ public final class MonitorCore {
 
         let baselineAge = now - (sources[source]?.baselineAt ?? -.infinity)
         let warming: Set<MetricKey> = source.isDifferenced && baselineAge < 0.25 * interval
-            ? Set(job.keys.filter(\.isDifferenced))
+            ? Set(metricKeys(job).filter(\.isDifferenced))
             : []
 
         var request = SampleRequest(warmingKeys: warming)
@@ -392,31 +423,38 @@ public final class MonitorCore {
             sources[source]?.lastUpdated = now
             if job == .processMemory { processSnapshotIsFresh = true }
             apply(values, job: job, request: request, interval: interval, now: now, sampleWindow: window)
+        case .measuredPartial(let values, let window, let unsupported):
+            if !values.isEmpty { sources[source]?.lastUpdated = now }
+            apply(values, job: job, request: request, interval: interval, now: now, sampleWindow: window, unsupported: unsupported)
         }
     }
 
     private func invalidateDiskSample() {
         diskGeneration += 1
         diskRefreshPending = false
+        lastDiskReadStarted = nil
     }
 
     private func startDiskSample(_ collect: @escaping @Sendable (Double) -> SampleOutcome, at now: Double) {
         guard !diskSampleInFlight else { diskRefreshPending = true; return }
         sampleCount += 1
         diskSampleInFlight = true
+        lastDiskReadStarted = now
         let generation = diskGeneration
         Task { [weak self] in
             let outcome = await Task.detached(priority: .utility) { collect(now) }.value
             guard let self else { return }
             diskSampleInFlight = false
-            guard isCollecting, intervals[.disk] != nil, provider.diskBackgroundSample != nil else { return }
+            guard isCollecting, provider.diskBackgroundSample != nil else { return }
             let finished = Date().timeIntervalSinceReferenceDate
             if generation == diskGeneration {
                 switch outcome {
                 case .diskDrives(let drives):
                     diskDrives = drives
                     sources[.disk]?.lastUpdated = now
-                case .failed(let failure): handleFailure(.disk, failure: failure, now: finished)
+                case .failed(let failure):
+                    lastDiskReadStarted = nil
+                    if intervals[.disk] != nil { handleFailure(.disk, failure: failure, now: finished) }
                 default: break
                 }
             }
@@ -428,7 +466,7 @@ public final class MonitorCore {
         }
     }
 
-    private func apply(_ values: [MetricKey: Double], job: JobID, request: SampleRequest, interval: TimeInterval, now: TimeInterval, sampleWindow: TimeInterval? = nil) {
+    private func apply(_ values: [MetricKey: Double], job: JobID, request: SampleRequest, interval: TimeInterval, now: TimeInterval, sampleWindow: TimeInterval? = nil, unsupported: Set<MetricKey> = []) {
         switch job {
         case .temperatures:
             let requested = Set(request.sensorIDs)
@@ -458,7 +496,14 @@ public final class MonitorCore {
             break
         }
 
-        for key in job.keys {
+        for key in metricKeys(job) {
+            if unsupported.contains(key) {
+                if readings[key]?.unavailableReason != .unsupported {
+                    readings[key] = MetricReading(value: nil, unit: key.unit, status: .unavailable(.unsupported), source: job.source, quality: key.quality)
+                    if let series = key.series { history.markBreak(series) }
+                }
+                continue
+            }
             if request.warmingKeys.contains(key) {
                 readings[key] = .pending(key.unit, source: job.source, quality: key.quality)
                 continue
@@ -486,7 +531,7 @@ public final class MonitorCore {
     }
 
     private func markStaleIfNeeded(_ job: JobID, interval: TimeInterval, now: TimeInterval) {
-        for key in job.keys {
+        for key in metricKeys(job) {
             guard var reading = readings[key], reading.status == .valid, let timestamp = reading.timestamp else { continue }
             if now - timestamp > Self.staleCycles * interval {
                 reading.status = .stale
@@ -517,6 +562,9 @@ public final class MonitorCore {
         let sourceReason = sources[.sensors]?.reason
 
         func aggregate(_ ids: [String], _ combine: ([Double]) -> Double) -> MetricReading {
+            if ids.isEmpty {
+                return MetricReading(value: nil, unit: .celsius, status: .unavailable(sourceReason ?? .unsupported), source: .sensors, quality: .derived)
+            }
             let present = ids.compactMap { readings[.sensor($0)] }
             let values = present.filter { $0.status == .valid || $0.status == .stale }.compactMap(\.value)
             guard !values.isEmpty else {
@@ -550,7 +598,7 @@ public final class MonitorCore {
         let gpu = aggregate(gpuSensorIDs) { $0.max() ?? 0 }
         readings[.gpuTemperature] = gpu
 
-        for core in CoreID.all {
+        for core in machine.cpuTopology.cores {
             if let id = mappedSensorIDs[core], let reading = readings[.sensor(id)] {
                 readings[.coreTemperature(core.flatIndex)] = reading
             } else {
@@ -562,7 +610,7 @@ public final class MonitorCore {
         // A selected custom sensor may leave other cores unrequested in the
         // background. Record only fresh mapped reads; never extend a cached
         // value into a period when that core was not actually sampled.
-        for core in CoreID.all where demands.contains(.coreHistory) {
+        for core in machine.cpuTopology.cores where demands.contains(.coreHistory) {
             let key = SeriesKey.coreTemperature(core)
             if let reading = readings[.coreTemperature(core.flatIndex)],
                reading.status == .valid, reading.timestamp == now,
@@ -586,6 +634,7 @@ public final class MonitorCore {
     private func attemptOpen(_ source: SourceID, now: TimeInterval, attemptsMade: Int?) {
         switch provider.open(source, at: now) {
         case .opened:
+            if source == .sensors { refreshSensorIndex() }
             var runtime = sources[source] ?? SourceRuntime()
             runtime.phase = .active
             runtime.baselineAt = now
@@ -641,7 +690,7 @@ public final class MonitorCore {
     private func markUnavailable(_ source: SourceID, reason: UnavailableReason) {
         if source == .disk { diskDrives.removeAll() }
         for job in source.jobs {
-            for key in job.keys {
+            for key in metricKeys(job) {
                 readings[key, default: .pending(key.unit, source: source, quality: key.quality)].status = .unavailable(reason)
             }
         }
@@ -662,7 +711,7 @@ public final class MonitorCore {
 
     private func markWarming(_ source: SourceID, differencedOnly: Bool) {
         for job in source.jobs {
-            for key in job.keys where !differencedOnly || key.isDifferenced {
+            for key in metricKeys(job) where !differencedOnly || key.isDifferenced {
                 readings[key] = .pending(key.unit, source: source, quality: key.quality)
             }
         }
@@ -699,17 +748,21 @@ public final class MonitorCore {
     }
 
     public func snapshot(now: TimeInterval) -> MonitorSnapshot {
+        let topology = machine.cpuTopology
         let cpu = CPUSnapshot(
             total: reading(.cpuTotal),
+            eCore: reading(.cpuE),
             sCore: reading(.cpuS),
             pCore: reading(.cpuP),
+            eFrequency: reading(.cpuFrequencyE),
             sFrequency: reading(.cpuFrequencyS),
             pFrequency: reading(.cpuFrequencyP),
             power: reading(.cpuPower),
             temperature: reading(.cpuTemperature),
             temperatureSource: temperatureSource,
-            cores: CoreID.all.map { reading(.core($0.flatIndex)) },
-            coreTemperatures: CoreID.all.map { readings[.coreTemperature($0.flatIndex)] },
+            topology: topology,
+            cores: topology.cores.map { reading(.core($0.flatIndex)) },
+            coreTemperatures: topology.cores.map { readings[.coreTemperature($0.flatIndex)] },
             throttle: provider.throttleStatus
         )
         let gpu = GPUSnapshot(
