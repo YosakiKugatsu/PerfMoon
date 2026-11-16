@@ -24,24 +24,36 @@ if ! xcodebuild -project "$source_dir/PerfMoon.xcodeproj" -scheme PerfMoon \
   exit 1
 fi
 
-mkdir -p "$scratch/image" "$output_dir"
-app="$scratch/image/PerfMoon.app"
+mkdir -p "$scratch/payload" "$scratch/image" "$output_dir"
+app="$scratch/payload/PerfMoon.app"
 ditto --norsrc --noextattr --noqtn --noacl \
   "$scratch/DerivedData/Build/Products/Release/PerfMoon.app" "$app"
 test ! -e "$app/Contents/_CodeSignature"
-
-# Apple silicon needs the native executable's link-time signature. An unsigned
-# launcher lets Gatekeeper treat the unsigned bundle as from an unidentified
-# developer rather than as a signed bundle with a missing resource seal.
-cat > "$app/Contents/MacOS/LaunchPerfMoon" <<'EOF'
-#!/bin/sh
-exec "${0%/*}/PerfMoon" "$@"
-EOF
-chmod 755 "$app/Contents/MacOS/LaunchPerfMoon"
 info="$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable LaunchPerfMoon' "$info"
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")
-ln -s /Applications "$scratch/image/Applications"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" = PerfMoon
+test "$(/usr/bin/lipo -archs "$app/Contents/MacOS/PerfMoon")" = arm64
+
+# Let macOS Installer handle approval of the unsigned package. The installed app
+# starts directly as a native process so macOS can register its menu bar item.
+components="$scratch/components.plist"
+/usr/bin/pkgbuild --analyze --root "$scratch/payload" "$components"
+test "$(/usr/libexec/PlistBuddy -c 'Print :0:RootRelativeBundlePath' "$components")" = PerfMoon.app
+/usr/libexec/PlistBuddy -c 'Set :0:BundleIsRelocatable false' "$components" 2>/dev/null ||
+  /usr/libexec/PlistBuddy -c 'Add :0:BundleIsRelocatable bool false' "$components"
+/usr/libexec/PlistBuddy -c 'Set :0:BundleHasStrictIdentifier true' "$components"
+/usr/libexec/PlistBuddy -c 'Set :0:BundleIsVersionChecked true' "$components"
+/usr/libexec/PlistBuddy -c 'Set :0:BundleOverwriteAction upgrade' "$components"
+
+package="$scratch/image/PerfMoon.pkg"
+/usr/bin/pkgbuild --root "$scratch/payload" --component-plist "$components" \
+  --install-location /Applications --identifier io.github.yosakikugatsu.PerfMoon \
+  --version "$version" --min-os-version 27.0 "$package"
+signature_status=$(LC_ALL=C /usr/sbin/pkgutil --check-signature "$package" 2>&1) || true
+if [[ "$signature_status" != *'Status: no signature'* ]]; then
+  print -u2 -r -- "$signature_status"
+  exit 1
+fi
 
 image="$output_dir/PerfMoon-$version-arm64.dmg"
 hdiutil create -volname PerfMoon -fs HFS+ -format UDZO -imagekey zlib-level=9 \

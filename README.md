@@ -23,11 +23,12 @@ Choose a 1-, 5-, or 15-minute chart range in the main window. You can pause moni
 
 The DMG requires an Apple silicon Mac running macOS 27.0 or later. You don't need Xcode to install it.
 
-1. Download and open [PerfMoon-0.0.2-arm64.dmg](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.2/PerfMoon-0.0.2-arm64.dmg).
-2. If you are upgrading, quit the running copy of PerfMoon. Drag **PerfMoon.app** to **Applications**, replace the old copy if prompted, and eject the disk image.
-3. Open **PerfMoon** from **Applications**. Look for it in the menu bar.
+1. Quit PerfMoon if it is already running.
+2. Download and open [PerfMoon-0.0.2-arm64.dmg](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.2/PerfMoon-0.0.2-arm64.dmg), then open **PerfMoon.pkg** inside the disk image.
+3. Follow the macOS Installer prompts. Installation may require an administrator password; PerfMoon does not need administrator privileges to run.
+4. Eject the disk image and open **PerfMoon** from **Applications**. Look for it in the menu bar.
 
-The downloaded app is unsigned and not notarized by Apple. If macOS can't verify the developer or check the app on first launch, and you trust the download from this release, go to **System Settings → Privacy & Security → Security**. Choose **Open** if shown, then **Open Anyway** for PerfMoon and confirm. This exception applies only to PerfMoon. See [Apple's guide to opening apps safely](https://support.apple.com/en-us/102445).
+The installer is unsigned and has not been notarized by Apple. If macOS blocks **PerfMoon.pkg** because it cannot verify the developer, and you trust the download from this release, go to **System Settings → Privacy & Security → Security**, choose **Open Anyway** for the installer, and confirm. See [Apple's guide to opening apps safely](https://support.apple.com/en-us/102445).
 
 ## Compatibility
 
