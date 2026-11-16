@@ -100,11 +100,11 @@ static FrequencyTable read_frequencies(io_registry_entry_t pmgr, const char *key
     return table;
 }
 
-static void tables_from_node(io_registry_entry_t pmgr, FrequencyTable *tables) {
+static void tables_from_node(io_registry_entry_t pmgr, FrequencyTable *tables, FrequencyTable *fallback) {
     if (!tables[GPU].count) tables[GPU] = read_frequencies(pmgr, "voltage-states9");
 
     // Apple names the table indices in the PMGR acc-clusters property. Match by
-    // cluster tier, not by chip brand, using legacy indices only when absent.
+    // cluster tier rather than inferring it from the frequency values.
     CFDataRef data = registry_data(pmgr, "acc-clusters");
     if (data) {
         const uint8_t *bytes = CFDataGetBytePtr(data);
@@ -117,25 +117,29 @@ static void tables_from_node(io_registry_entry_t pmgr, FrequencyTable *tables) {
             tables[type] = read_frequencies(pmgr, key);
         }
         CFRelease(data);
-    } else {
-        if (!tables[ECPU].count) tables[ECPU] = read_frequencies(pmgr, "voltage-states1-sram");
-        if (!tables[PCPU].count) tables[PCPU] = read_frequencies(pmgr, "voltage-states5-sram");
+    }
+    if (fallback) {
+        // These are the known ECPU and PCPU table keys. Keep them as separate
+        // candidates until we have checked the real states of each channel.
+        if (!fallback[ECPU].count) fallback[ECPU] = read_frequencies(pmgr, "voltage-states1-sram");
+        if (!fallback[PCPU].count) fallback[PCPU] = read_frequencies(pmgr, "voltage-states5-sram");
     }
 }
 
-static void read_tables(FrequencyTable *tables) {
+static void read_tables(FrequencyTable *tables, FrequencyTable *fallback) {
     io_registry_entry_t pmgr = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/arm-io/pmgr");
     if (pmgr) {
-        tables_from_node(pmgr, tables);
+        tables_from_node(pmgr, tables, fallback);
         IOObjectRelease(pmgr);
     }
-    if (tables[ECPU].count && tables[MCPU].count && tables[PCPU].count && tables[GPU].count) return;
+    if (tables[ECPU].count && tables[MCPU].count && tables[PCPU].count && tables[GPU].count &&
+        (!fallback || (fallback[ECPU].count && fallback[PCPU].count))) return;
     io_iterator_t nodes = 0;
     if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("AppleARMIODevice"), &nodes) != KERN_SUCCESS) return;
     for (io_registry_entry_t node; (node = IOIteratorNext(nodes)) != 0;) {
         io_name_t name;
         if (IORegistryEntryGetName(node, name) == KERN_SUCCESS &&
-            (!strcmp(name, "pmgr") || !strcmp(name, "pmgr-child"))) tables_from_node(node, tables);
+            (!strcmp(name, "pmgr") || !strcmp(name, "pmgr-child"))) tables_from_node(node, tables, fallback);
         IOObjectRelease(node);
     }
     IOObjectRelease(nodes);
@@ -254,17 +258,21 @@ static bool idle_state(const char *name) {
 // Baseline samples contain state names even when their deltas are zero. A table
 // can cover a prefix of the states (e.g. 13 defined GPU clocks on M5 Pro with
 // 15 firmware slots). Samples with nonzero residency outside it omit frequency.
-static bool table_fits(CFDictionaryRef sample, const FrequencyTable *table) {
-    int active_states = 0;
+static size_t available_frequency_states(CFDictionaryRef sample) {
+    size_t active_states = 0;
     bool idle = false;
     for (int i = 0; i < IOReportStateGetCount(sample); i++) {
         char name[80];
         text(IOReportStateGetNameForIndex(sample, i), name, sizeof(name));
-        if (!name[0]) return false;
+        if (!name[0]) return 0;
         if (idle_state(name)) idle = true;
         else active_states++;
     }
-    return idle && table->count > 0 && active_states >= table->count;
+    return idle ? active_states : 0;
+}
+
+static bool frequency_table_fits(const FrequencyTable *table, size_t available_active_states) {
+    return table->count > 0 && (size_t)table->count <= available_active_states;
 }
 
 static int energy_kind(const char *name) {
@@ -297,7 +305,8 @@ PMReport *pm_report_open(uint32_t cpu_frequency_roles) {
     char version[32] = {0};
     size_t length = sizeof(version);
     if (!sysctlbyname("kern.osproductversion", version, &length, NULL, 0)) c->os_major = atoi(version);
-    read_tables(c->tables);
+    FrequencyTable fallback[3] = {0};
+    read_tables(c->tables, cpu_frequency_roles ? fallback : NULL);
 
     CFMutableArrayRef selected = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
     const CFStringRef groups[] = {CFSTR("CPU Stats"), CFSTR("GPU Stats"), CFSTR("SoC Stats"), CFSTR("Energy Model")};
@@ -364,15 +373,16 @@ PMReport *pm_report_open(uint32_t cpu_frequency_roles) {
         if (cpu_frequency_roles & PM_REPORT_CPU_FREQUENCY_P) c->cpu_role[MCPU] = PM_REPORT_CPU_FREQUENCY_P;
     } else if (cpu_frequency_roles & PM_REPORT_CPU_FREQUENCY_P) {
         c->cpu_role[PCPU] = PM_REPORT_CPU_FREQUENCY_P;
-        // On a two-tier topology without a Super tier, firmware can publish one
-        // Performance table (type 1) even when IOReport calls it PCPU.
-        if (!cpu[MCPU] && !c->tables[PCPU].count) c->tables[PCPU] = c->tables[MCPU];
-    }
-    for (int kind = ECPU; kind <= PCPU; kind++) {
-        if (cpu[kind] && c->tables[kind].count) c->capabilities |= c->cpu_role[kind];
     }
     pm_report_rebaseline(c);
     CFArrayRef baseline = channels_in(c->previous);
+    if (c->subscription && !baseline) {
+        // A missing baseline is a transient read failure, not a missing feature.
+        pm_report_close(c);
+        return NULL;
+    }
+    size_t cpu_state_limit[3] = {SIZE_MAX, SIZE_MAX, SIZE_MAX};
+    bool cpu_baseline_seen[3] = {false};
     for (CFIndex i = 0; baseline && i < CFArrayGetCount(baseline); i++) {
         CFDictionaryRef item = CFArrayGetValueAtIndex(baseline, i);
         char group[128], name[160];
@@ -380,13 +390,34 @@ PMReport *pm_report_open(uint32_t cpu_frequency_roles) {
         text(IOReportChannelGetChannelName(item), name, sizeof(name));
         if (!strcmp(group, "CPU Stats")) {
             int kind = cpu_kind(name);
-            if (kind >= 0 && (c->capabilities & c->cpu_role[kind]) && !table_fits(item, &c->tables[kind]))
-                c->capabilities &= ~c->cpu_role[kind];
+            if (kind >= 0 && c->cpu_role[kind]) {
+                size_t available = available_frequency_states(item);
+                if (available < cpu_state_limit[kind]) cpu_state_limit[kind] = available;
+                cpu_baseline_seen[kind] = true;
+            }
         } else if (!strcmp(group, "GPU Stats") && gpu_residency(name) &&
                    (!c->aggregate_gpu || !strcmp(name, "GPUPH")) &&
-                   !table_fits(item, &c->tables[GPU])) {
+                   !frequency_table_fits(&c->tables[GPU], available_frequency_states(item))) {
             c->capabilities &= ~PM_REPORT_GPU_FREQUENCY;
         }
+    }
+    for (int kind = ECPU; kind <= PCPU; kind++) {
+        if (!cpu_baseline_seen[kind]) continue;
+        size_t available = cpu_state_limit[kind];
+        if (!frequency_table_fits(&c->tables[kind], available)) {
+            // Firmware can put its sole fast group in type 1 while IOReport
+            // calls it PCPU. Reuse that mapping only when there is no separate
+            // MCPU channel or role, so P and S never borrow each other's table.
+            if (kind == PCPU && !cpu[MCPU] && !c->cpu_role[MCPU] &&
+                frequency_table_fits(&c->tables[MCPU], available)) {
+                c->tables[kind] = c->tables[MCPU];
+            } else if (frequency_table_fits(&fallback[kind], available)) {
+                c->tables[kind] = fallback[kind];
+            } else {
+                continue;
+            }
+        }
+        c->capabilities |= c->cpu_role[kind];
     }
     return c;
 }
