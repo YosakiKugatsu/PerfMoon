@@ -8,8 +8,8 @@ import SwiftUI
 enum Palette {
     static let cpu = Color.blue
     static let eCore = Color.green
-    static let sCore = cpu
-    static let pCore = Color.indigo
+    static let sCore = Color.indigo
+    static let pCore = cpu
     static let gpu = Color.teal
     static let ane = Color.purple
     static let power = Color.orange

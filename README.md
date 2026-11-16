@@ -4,7 +4,7 @@
 
 PerfMoon is a native macOS performance monitor for Apple silicon. See key readings in the menu bar, open the quick panel for a closer look, or use the main window to explore up to 15 minutes of history. PerfMoon is built with SwiftUI and AppKit.
 
-[Download v0.0.2 (DMG)](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.2/PerfMoon-0.0.2-arm64.dmg) · [Install](#install) · [Releases](https://github.com/YosakiKugatsu/PerfMoon/releases) · [Build from source](#build-from-source) · [Contributing](CONTRIBUTING.md) · [GPL v3](LICENSE)
+[Download v0.0.3 (DMG)](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.3/PerfMoon-0.0.3-arm64.dmg) · [Install](#install) · [Releases](https://github.com/YosakiKugatsu/PerfMoon/releases) · [Build from source](#build-from-source) · [Contributing](CONTRIBUTING.md) · [GPL v3](LICENSE)
 
 ## Features
 
@@ -24,7 +24,7 @@ Choose a 1-, 5-, or 15-minute chart range in the main window. You can pause moni
 The DMG requires an Apple silicon Mac running macOS 27.0 or later. You don't need Xcode to install it.
 
 1. Quit PerfMoon if it is already running.
-2. Download and open [PerfMoon-0.0.2-arm64.dmg](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.2/PerfMoon-0.0.2-arm64.dmg), then open **PerfMoon.pkg** inside the disk image.
+2. Download and open [PerfMoon-0.0.3-arm64.dmg](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.3/PerfMoon-0.0.3-arm64.dmg), then open **PerfMoon.pkg** inside the disk image.
 3. Follow the macOS Installer prompts. Installation may require an administrator password; PerfMoon does not need administrator privileges to run.
 4. Eject the disk image and open **PerfMoon** from **Applications**. Look for it in the menu bar.
 
@@ -36,12 +36,12 @@ PerfMoon runs on Apple silicon Macs with macOS 27.0 or later. This release was t
 
 ## Build from source
 
-Building requires Xcode 27.2 or later. Run `xcodebuild -version` to check the active version. Download the [v0.0.2 source archive](https://github.com/YosakiKugatsu/PerfMoon/archive/refs/tags/v0.0.2.tar.gz) or clone the repository:
+Building requires Xcode 27.2 or later. Run `xcodebuild -version` to check the active version. Download the [v0.0.3 source archive](https://github.com/YosakiKugatsu/PerfMoon/archive/refs/tags/v0.0.3.tar.gz) or clone the repository:
 
 ```sh
 git clone https://github.com/YosakiKugatsu/PerfMoon.git
 cd PerfMoon
-git checkout v0.0.2
+git checkout v0.0.3
 scripts/build.sh
 open build/PerfMoon.app
 ```
