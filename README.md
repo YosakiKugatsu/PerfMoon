@@ -47,8 +47,6 @@ open build/PerfMoon.app
 
 The build script signs a local copy in `build/`. To install it, move `PerfMoon.app` to **Applications** in Finder. You can also open `PerfMoon.xcodeproj` in Xcode and build the **PerfMoon** scheme.
 
-To reproduce the unsigned DMG from the tagged source, download the [packaging script](https://github.com/YosakiKugatsu/PerfMoon/releases/download/v0.0.1/PerfMoon-0.0.1-build-dmg.sh) from the release and run `zsh PerfMoon-0.0.1-build-dmg.sh /path/to/PerfMoon-source`.
-
 ## Using PerfMoon
 
 - **Click** the menu bar item to open the quick panel. Select a CPU, GPU, or power tile to see its short history. In the memory card, switch between Usage, History, and Top 10.
