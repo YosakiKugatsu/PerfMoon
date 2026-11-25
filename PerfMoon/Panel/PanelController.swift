@@ -50,9 +50,17 @@ final class PanelController: NSObject, NSPopoverDelegate {
                 self?.close()
                 app.openSettings(tab: nil)
             },
-            retryStopped: { [unowned app] in app.engine.retryStopped() },
+            retryStopped: { [unowned app] in app.retryStopped() },
             useCPUMax: { [unowned app] in app.settings.temperatureSource = .cpuMax },
             setProcessListVisible: { [weak self] visible in self?.setProcessListVisible(visible) },
+            setCoreMetric: { [unowned app] demand in
+                app.engine.setDemand(.panelCorePower, active: demand == .panelCorePower)
+                app.engine.setDemand(.panelCoreTemperatures, active: demand == .panelCoreTemperatures)
+            },
+            setTransferDemand: { [unowned app] demand in
+                app.engine.setDemand(.panelNetwork, active: demand == .panelNetwork)
+                app.engine.setDemand(.panelDiskActivity, active: demand == .panelDiskActivity)
+            },
             close: { [weak self] in self?.close() }
         )
         let root = AppEnvironment(app: app) {
@@ -98,6 +106,10 @@ final class PanelController: NSObject, NSPopoverDelegate {
         processListOnScreen = false
         syncProcessDemand()
         app.engine.setDemand(.popover, active: false)
+        app.engine.setDemand(.panelCorePower, active: false)
+        app.engine.setDemand(.panelCoreTemperatures, active: false)
+        app.engine.setDemand(.panelNetwork, active: false)
+        app.engine.setDemand(.panelDiskActivity, active: false)
         popover.contentViewController = nil
         model = nil
     }

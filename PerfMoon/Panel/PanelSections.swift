@@ -43,9 +43,10 @@ private struct PanelChart {
 /// is tinted with its chart color and drives the sparkline below.
 struct CPUPanelSection: View {
     let model: DashboardModel
+    let setCoreMetric: (Demand?) -> Void
 
     @AppStorage("panel.cpu.metric") private var metric: PanelMetric = .usage
-    @AppStorage("panel.cpu.activeCluster") private var activeCluster: CoreCluster = .e
+    @AppStorage("panel.cpu.activeCluster") private var activeCluster: CoreCluster = .s
     @AppStorage("panel.expanded.e") private var expandedE = false
     @AppStorage("panel.expanded.s") private var expandedS = false
     @AppStorage("panel.expanded.p") private var expandedP = false
@@ -109,6 +110,9 @@ struct CPUPanelSection: View {
                 }
             }
         }
+        .onChange(of: selected, initial: true) { _, value in
+            setCoreMetric(value == .temperature ? .panelCoreTemperatures : value == .power ? .panelCorePower : nil)
+        }
     }
 
     @ViewBuilder
@@ -136,7 +140,7 @@ struct CPUPanelSection: View {
         case .s: (expanded, frequency) = ($expandedS, $frequencyS)
         case .p: (expanded, frequency) = ($expandedP, $frequencyP)
         }
-        return ClusterDisclosure(cluster: cluster, cpu: cpu, model: model,
+        return ClusterDisclosure(cluster: cluster, cpu: cpu, model: model, metric: selectedMetric,
                                  isExpanded: binding(expanded), showsFrequency: frequency)
     }
 
@@ -181,16 +185,76 @@ struct CPUPanelSection: View {
     }
 }
 
+private extension PanelMetric {
+    var coreLabel: String {
+        switch self {
+        case .temperature: "temperature"
+        case .power: "power"
+        default: "usage"
+        }
+    }
+
+    func reading(_ core: CoreID, cpu: CPUSnapshot) -> MetricReading {
+        switch self {
+        case .temperature:
+            return cpu.coreTemperatures[core.flatIndex]
+                ?? MetricReading(value: nil, unit: .celsius, status: .unavailable(.unsupported), source: .sensors)
+        case .power:
+            return cpu.corePowers.indices.contains(core.flatIndex) ? cpu.corePowers[core.flatIndex] : .pending(.watts, source: .corePower)
+        default: return cpu.cores[core.flatIndex]
+        }
+    }
+
+    func reading(_ group: CPUClusterTopology, cpu: CPUSnapshot) -> MetricReading {
+        if self == .usage { return cpu.usage(group.role) }
+        let readings = group.cores.map { reading($0, cpu: cpu) }
+        let available = readings.compactMap(\.shownValue)
+        if let value = available.max(), self == .temperature {
+            return readings.first { $0.shownValue == value }!
+        }
+        if self == .power, available.count == readings.count, var result = readings.first {
+            result.value = available.reduce(0, +)
+            if readings.contains(where: \.isStale) { result.status = .stale }
+            return result
+        }
+        return readings.first { $0.shownValue == nil } ?? .pending(self == .power ? .watts : .celsius)
+    }
+
+    func fraction(_ reading: MetricReading, cpu: CPUSnapshot) -> Double? {
+        guard let value = reading.shownValue else { return nil }
+        if self == .power { return cpu.power.shownValue.flatMap { $0 > 0 ? min(1, value / $0) : nil } }
+        return min(1, max(0, value / 100))
+    }
+
+    func text(_ value: Double, unit: TemperatureUnit, compact: Bool) -> String {
+        switch self {
+        case .temperature: compact ? Format.temperatureCompact(value, unit: unit) : Format.temperature(value, unit: unit)
+        case .power: Format.coreWatts(value, compact: compact)
+        default: Format.percent(value)
+        }
+    }
+
+    func spoken(_ value: Double, unit: TemperatureUnit) -> String {
+        switch self {
+        case .temperature: Format.spokenTemperature(value, unit: unit)
+        case .power: Format.coreWatts(value, compact: false)
+        default: Format.spokenPercent(value)
+        }
+    }
+}
+
 /// A cluster row that expands to show every core. Click, Return, or Space toggles.
 private struct ClusterDisclosure: View {
     let cluster: CPUClusterTopology
     let cpu: CPUSnapshot
     let model: DashboardModel
+    let metric: PanelMetric
+    @Environment(\.temperatureUnit) private var unit
     @Binding var isExpanded: Bool
     @Binding var showsFrequency: Bool
 
     var body: some View {
-        let usage = cpu.usage(cluster.role)
+        let value = metric.reading(cluster, cpu: cpu)
         let frequency = cpu.frequency(cluster.role)
         HStack(spacing: 8) {
             CoreTierIcon(tier: .cluster(cluster.role))
@@ -201,8 +265,8 @@ private struct ClusterDisclosure: View {
                 if isExpanded {
                     expandedGrid
                         .disclosureInteraction(isExpanded: $isExpanded,
-                            label: "\(cluster.title), \(cluster.count) cores", value: accessibilityValue(usage),
-                            hint: "Shows cluster usage and frequency", preservesChildren: true)
+                            label: "\(cluster.title), \(cluster.count) cores", value: accessibilityValue(value),
+                            hint: "Shows group \(metric.coreLabel)", preservesChildren: true)
                         .transition(.opacity)
                 } else {
                     VStack(alignment: .leading, spacing: 5) {
@@ -211,27 +275,31 @@ private struct ClusterDisclosure: View {
                             Text("×\(cluster.count)")
                                 .font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
                             Spacer(minLength: 8)
-                            ReadingText.percent(usage, font: .system(size: 13, weight: .semibold).monospacedDigit())
+                            ReadingText(reading: value, format: { metric.text($0, unit: unit, compact: false) },
+                                        font: .system(size: 13, weight: .semibold).monospacedDigit())
                         }
                         .disclosureInteraction(isExpanded: $isExpanded,
-                            label: "\(cluster.title), \(cluster.count) cores", value: accessibilityValue(usage),
-                            hint: "Shows per-core usage")
+                            label: "\(cluster.title), \(cluster.count) cores", value: accessibilityValue(value),
+                            hint: "Shows per-core \(metric.coreLabel)")
                         HStack(spacing: 8) {
                             Group {
-                                if showsFrequency && frequency.unavailableReason == nil {
+                                if metric == .usage && showsFrequency && frequency.unavailableReason == nil {
                                     Sparkline(key: cluster.role.frequencySeries,
                                               color: Palette.cluster(cluster.role), end: model.time, revision: model.historyRevision,
                                               domain: nil, zeroBased: true)
                                 } else {
-                                    Meter(fraction: usage.shownValue.map { $0 / 100 }, color: Palette.cluster(cluster.role))
+                                    Meter(fraction: metric.fraction(value, cpu: cpu), color: Palette.cluster(cluster.role))
                                 }
                             }
                             .frame(maxWidth: .infinity, minHeight: 14, maxHeight: 14)
                             .contentShape(Rectangle())
                             .onTapGesture { isExpanded.toggle() }
-                            FrequencyChip(cluster: cluster, reading: frequency, isOn: $showsFrequency)
-                                .fixedSize()
-                                .frame(width: 88, alignment: .trailing)
+                            if metric == .usage {
+                                FrequencyChip(cluster: cluster, reading: frequency, isOn: $showsFrequency)
+                                    .fixedSize().frame(width: 88, alignment: .trailing)
+                            } else {
+                                Text(metric == .temperature ? "Hottest core" : "Core total").font(.pmCaption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                     .padding(.vertical, 2)
@@ -251,7 +319,7 @@ private struct ClusterDisclosure: View {
     }
 
     @ViewBuilder private var expandedGrid: some View {
-        let grid = PanelCoreGrid(cluster: cluster, cpu: cpu,
+        let grid = PanelCoreGrid(cluster: cluster, cpu: cpu, metric: metric,
                                 cellHeight: cluster.count <= 6 ? PanelLayout.clusterHeight : PanelLayout.compactCellHeight)
         if cluster.count <= 12 {
             grid
@@ -263,8 +331,8 @@ private struct ClusterDisclosure: View {
 
     private func accessibilityValue(_ usage: MetricReading) -> String {
         var parts: [String] = []
-        parts.append(usage.shownValue.map(Format.spokenPercent) ?? ReadingText.placeholderHelp(usage))
-        if let frequency = cpu.frequency(cluster.role).shownValue {
+        parts.append(usage.shownValue.map { metric.spoken($0, unit: unit) } ?? ReadingText.placeholderHelp(usage))
+        if metric == .usage, let frequency = cpu.frequency(cluster.role).shownValue {
             parts.append("frequency \(Format.spokenFrequency(frequency))")
         }
         parts.append(isExpanded ? "expanded" : "collapsed")
@@ -306,20 +374,29 @@ private struct FrequencyChip: View {
 private struct PanelCoreGrid: View {
     let cluster: CPUClusterTopology
     let cpu: CPUSnapshot
+    let metric: PanelMetric
     var cellHeight: CGFloat = 32
 
     var body: some View {
         let cores = cluster.cores
-        let rows = stride(from: 0, to: cores.count, by: 6).map { Array(cores[$0..<min($0 + 6, cores.count)]) }
-        VStack(spacing: 4) {
-            ForEach(rows.indices, id: \.self) { row in
-                HStack(spacing: 4) {
-                    ForEach(rows[row]) { core in
-                        PanelCoreCell(core: core, reading: cpu.cores[core.flatIndex], height: cellHeight)
+        let columns = min(6, max(1, cores.count))
+        let rows = (cores.count + columns - 1) / columns
+        GeometryReader { geometry in
+            let cellWidth = max(0, (geometry.size.width - CGFloat(columns - 1) * 4) / CGFloat(columns))
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(0..<rows, id: \.self) { row in
+                    HStack(spacing: 4) {
+                        ForEach(cores[(row * columns)..<min((row + 1) * columns, cores.count)]) { core in
+                            let reading = metric.reading(core, cpu: cpu)
+                            PanelCoreCell(core: core, reading: reading, metric: metric,
+                                          fraction: metric.fraction(reading, cpu: cpu) ?? 0, height: cellHeight)
+                                .frame(width: cellWidth)
+                        }
                     }
                 }
             }
         }
+        .frame(height: CGFloat(rows) * cellHeight + CGFloat(max(0, rows - 1)) * 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(cluster.title) cores")
     }
@@ -328,12 +405,14 @@ private struct PanelCoreGrid: View {
 private struct PanelCoreCell: View {
     let core: CoreID
     let reading: MetricReading
+    let metric: PanelMetric
+    let fraction: Double
+    @Environment(\.temperatureUnit) private var unit
     var height: CGFloat = 32
 
     @Environment(\.monitorPaused) private var paused
 
     var body: some View {
-        let fraction = min(1, max(0, (reading.shownValue ?? 0) / 100))
         let color = Palette.cluster(core.cluster)
         ZStack(alignment: .bottom) {
             RoundedRectangle(cornerRadius: height < 24 ? 4 : 6).fill(.fill.quaternary)
@@ -344,10 +423,10 @@ private struct PanelCoreCell: View {
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                    Spacer(minLength: 0)
-                    ReadingText.percent(reading, font: .system(size: 9.5, weight: .semibold).monospacedDigit())
                         .fixedSize()
+                    Spacer(minLength: 0)
+                    ReadingText(reading: reading, format: { metric.text($0, unit: unit, compact: true) }, font: .system(size: 9.5, weight: .semibold).monospacedDigit())
+                        .lineLimit(1).minimumScaleFactor(0.8)
                         .layoutPriority(1)
                 }
                 .padding(.horizontal, 2.5).padding(.bottom, 2)
@@ -362,8 +441,8 @@ private struct PanelCoreCell: View {
                     Spacer(minLength: 0)
                     HStack {
                         Spacer(minLength: 0)
-                        ReadingText.percent(reading, font: .system(size: 11, weight: .semibold).monospacedDigit())
-                            .fixedSize()
+                        ReadingText(reading: reading, format: { metric.text($0, unit: unit, compact: true) }, font: .system(size: 11, weight: .semibold).monospacedDigit())
+                            .lineLimit(1).minimumScaleFactor(0.8)
                     }
                 }
                 .padding(.horizontal, 5).padding(.vertical, 4)
@@ -372,8 +451,9 @@ private struct PanelCoreCell: View {
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
         .clipShape(.rect(cornerRadius: height < 24 ? 4 : 6))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(core.label)
-        .accessibilityValue(reading.shownValue.map(Format.spokenPercent) ?? ReadingText.placeholderHelp(reading))
+        .help("\(core.label) · \(reading.shownValue.map { metric.spoken($0, unit: unit) } ?? ReadingText.placeholderHelp(reading))")
+        .accessibilityLabel("\(core.label) \(metric.coreLabel)")
+        .accessibilityValue(reading.shownValue.map { metric.spoken($0, unit: unit) } ?? ReadingText.placeholderHelp(reading))
     }
 }
 
@@ -608,24 +688,22 @@ private struct ModeChip: View {
     }
 }
 
-// MARK: - Disk
+// MARK: - I/O
 
-/// One physical drive at a time, in a card whose height never changes, so opening its
-/// volumes or connecting a drive can't move Power. The summary shows the drive's capacity and
-/// names its volumes; clicking it lists each volume with its own used space and file system.
-/// With several drives connected, the drive's title becomes a menu.
+/// Disk capacity, disk activity, and network traffic share one fixed-height card.
 struct DiskPanelSection: View {
     let model: DashboardModel
+    let setTransferDemand: (Demand?) -> Void
+    let openNetwork: () -> Void
+    @AppStorage("panel.io.network") private var showsNetwork = false
 
     /// The chosen drive's BSD name. If it's disconnected, the first (startup) drive shows
     /// instead, and the choice returns when it's connected again.
     @AppStorage("panel.disk.drive") private var selectedDriveID = ""
-    @AppStorage("panel.disk.showsVolumes") private var showsVolumes = false
+    @AppStorage("panel.disk.showsActivity") private var showsActivity = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Fits the summary's two rows or three volume rows; longer lists scroll inside it.
     private static let contentHeight: CGFloat = 40
-    private static let visibleVolumes = 3
 
     var body: some View {
         let drives = model.diskDrives
@@ -635,8 +713,10 @@ struct DiskPanelSection: View {
                 header(drives, drive: drive)
                     .frame(height: 18)
                 Group {
-                    if let drive {
-                        if showsVolumes { volumeList(drive) } else { summary(drive) }
+                    if showsNetwork {
+                        TransferPair(rates: model.network.rates, incoming: "Download", outgoing: "Upload", font: .pmTileNumber)
+                    } else if let drive {
+                        diskTile(drive)
                     } else {
                         pending
                     }
@@ -644,21 +724,47 @@ struct DiskPanelSection: View {
                 .frame(height: Self.contentHeight, alignment: .top)
             }
         }
+        .onChange(of: transferDemand, initial: true) { _, demand in setTransferDemand(demand) }
+    }
+
+    private var transferDemand: Demand? {
+        if showsNetwork { return .panelNetwork }
+        return showsActivity ? .panelDiskActivity : nil
     }
 
     // MARK: Header
 
     private func header(_ drives: [DiskDriveSnapshot], drive: DiskDriveSnapshot?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            SectionTitle(title: "Disk")
-            if let drive {
-                if showsVolumes {
-                    backButton(drive)
-                } else if drives.count > 1 {
+            SectionTitle(title: "I/O")
+                .fixedSize()
+            HStack(spacing: 2) {
+                ModeChip(title: "Disk", isSelected: !showsNetwork, hint: "Show the selected drive") { showsNetwork = false }
+                ModeChip(title: "Network", isSelected: showsNetwork, hint: "Show interface traffic") { showsNetwork = true }
+            }
+            .fixedSize()
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("I/O view")
+            Spacer(minLength: 6)
+            if showsNetwork {
+                let disconnected = model.network.rates.incoming.unavailableReason == .interfaceDisconnected
+                Button(action: openNetwork) {
+                    Text(model.network.selected?.displayTitle ?? (disconnected ? "Disconnected" : "Network details"))
+                        .font(.pmCaption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .buttonStyle(.plain)
+                .help("Open Network")
+                .accessibilityHint("Opens the Network page")
+            } else if let drive {
+                if drives.count > 1 {
                     driveMenu(drives, selected: drive)
                 } else {
-                    Text("\(drive.storageTitle)\(Text(" · \(drive.id)").foregroundStyle(.tertiary))")
+                    Text("\(drive.shortTitle)\(Text(" · \(drive.id)").foregroundStyle(.tertiary))")
                         .font(.pmCaption)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(drive.menuTitle)
@@ -669,17 +775,68 @@ struct DiskPanelSection: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            Spacer(minLength: 8)
-            if let drive, showsVolumes {
-                Text(drive.volumes.count == 1 ? "1 volume" : "\(drive.volumes.count) volumes")
-                    .font(.pmCaption)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize()
-            } else {
-                DiskAvailableText(capacity: capacity(drive))
-                    .layoutPriority(1)
-                    .accessibilityHidden(true)
+        }
+    }
+
+    private func diskTile(_ drive: DiskDriveSnapshot) -> some View {
+        let name = drive.leadingVolume?.name ?? drive.name
+        let activity = showsActivity ? model.diskActivity.first { $0.device == drive.id } : nil
+        return TileButton(color: .primary, isSelected: false, cornerRadius: 6, action: toggleDiskView) {
+            Group {
+                if !showsActivity {
+                    summary(drive, name: name)
+                } else if let activity {
+                    activityRow(activity)
+                } else {
+                    Text(activityStatusText)
+                        .font(.pmCaption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(.horizontal, TileLayout.inset)
+        }
+        .padding(.horizontal, -TileLayout.inset)
+        .help(showsActivity ? "Click to show disk capacity." : "\(drive.capacityHelp) Click to show the last minute of read and write activity.")
+        .accessibilityLabel(showsActivity ? "\(name), disk activity" : "\(name), disk capacity")
+        .accessibilityValue(showsActivity ? spokenActivity(activity) : drive.spokenCapacity)
+        .accessibilityHint(showsActivity ? "Shows disk capacity" : "Shows the last minute of read and write activity")
+    }
+
+    private func activityRow(_ activity: DiskActivity) -> some View {
+        HStack(spacing: 8) {
+            Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 2) {
+                diskRate("Read", activity.bytes.incoming, Palette.incoming)
+                diskRate("Write", activity.bytes.outgoing, Palette.outgoing)
+            }
+            .frame(width: 102, alignment: .leading)
+            TransferChart(incoming: .diskActivity(activity.id, .read), outgoing: .diskActivity(activity.id, .write),
+                          labels: ("Read", "Write"),
+                          context: ChartContext(range: .oneMinute, end: model.time, revision: model.historyRevision),
+                          compact: true, reason: activity.bytes.incoming.unavailableReason)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var activityStatusText: String {
+        switch model.diskActivityStatus {
+        case .warming: ReadingStatus.warmingMessage
+        case .unavailable(let reason): reason.message
+        default: "No device counters available"
+        }
+    }
+
+    private func spokenActivity(_ activity: DiskActivity?) -> String {
+        guard let rates = activity?.bytes else { return activityStatusText }
+        return "Read \(ReadingText.spoken(rates.incoming, Format.transferRate)), Write \(ReadingText.spoken(rates.outgoing, Format.transferRate))"
+    }
+
+    private func diskRate(_ label: String, _ bytes: MetricReading, _ color: Color) -> some View {
+        GridRow(alignment: .firstTextBaseline) {
+            Text(label).font(.pmCaption.weight(.medium)).foregroundStyle(color)
+            ReadingText(reading: bytes, format: Format.transferRate, font: .pmBodyNumber)
+                .lineLimit(1).minimumScaleFactor(0.85)
+                .accessibilityLabel("\(label) \(ReadingText.spoken(bytes, Format.transferRate))")
         }
     }
 
@@ -691,7 +848,7 @@ struct DiskPanelSection: View {
             .pickerStyle(.inline)
             .labelsHidden()
         } label: {
-            Text("\(selected.storageTitle) · \(selected.id)")
+            Text("\(selected.shortTitle) · \(selected.id)")
                 .font(.pmCaption)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -704,73 +861,16 @@ struct DiskPanelSection: View {
         .accessibilityHint("Chooses which of \(drives.count) connected drives to show")
     }
 
-    private func backButton(_ drive: DiskDriveSnapshot) -> some View {
-        TileButton(color: .primary, isSelected: false, cornerRadius: 5, action: { setShowsVolumes(false) }) {
-            HStack(spacing: 3) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Text("\(drive.storageTitle) · \(drive.id)")
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+    private func summary(_ drive: DiskDriveSnapshot, name: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 12) {
+                DiskUsageText(capacity: drive, font: .pmTileNumber)
+                DiskCapacityBar(capacity: drive)
             }
-            .font(.pmCaption)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-        }
-        .help("Back to \(drive.storageTitle)")
-        .accessibilityLabel("Back to \(drive.storageTitle)")
-    }
-
-    // MARK: Content
-
-    /// Capacity, then the volumes it holds. The whole summary opens the volume list.
-    private func summary(_ drive: DiskDriveSnapshot) -> some View {
-        TileButton(color: .primary, isSelected: false, cornerRadius: 6, action: { setShowsVolumes(true) }) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center, spacing: 12) {
-                    DiskUsageText(capacity: drive, font: .pmTileNumber)
-                    DiskCapacityBar(capacity: drive)
-                }
-                HStack(spacing: 4) {
-                    Text(drive.volumeSummary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 6)
-                    Text("Volumes")
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                }
+            Text(name)
                 .font(.pmCaption)
                 .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, TileLayout.inset)
-            .padding(.vertical, 1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, -TileLayout.inset)
-        .help("\(drive.capacityHelp) Click to show each volume's used space and file system.")
-        .accessibilityLabel(drive.storageTitle)
-        .accessibilityValue("\(drive.spokenCapacity)\(drive.capacityScopeName.map { ", for \($0)" } ?? ""), volumes: \(drive.volumeSummary)")
-        .accessibilityHint("Shows each volume's used space and file system")
-    }
-
-    @ViewBuilder
-    private func volumeList(_ drive: DiskDriveSnapshot) -> some View {
-        if drive.volumes.isEmpty {
-            Text("No mounted volumes")
-                .font(.pmCaption)
-                .foregroundStyle(.secondary)
-        } else {
-            let rows = VStack(spacing: 0) {
-                ForEach(drive.volumes) { PanelVolumeRow(volume: $0) }
-            }
-            // Scrolls only past three volumes, inside this card's fixed space.
-            if drive.volumes.count > Self.visibleVolumes {
-                ScrollView { rows }
-            } else {
-                rows
-            }
+                .lineLimit(1)
         }
     }
 
@@ -793,47 +893,10 @@ struct DiskPanelSection: View {
         .accessibilityValue(model.disk.spokenCapacity)
     }
 
-    private func capacity(_ drive: DiskDriveSnapshot?) -> any StorageCapacity {
-        if let drive { return drive }
-        return model.disk
-    }
-
-    private func setShowsVolumes(_ value: Bool) {
-        if reduceMotion {
-            showsVolumes = value
-        } else {
-            withAnimation(.snappy(duration: 0.22)) { showsVolumes = value }
+    private func toggleDiskView() {
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
+            showsActivity.toggle()
         }
-    }
-}
-
-/// One volume on one line: its name, file system, and its own used space.
-private struct PanelVolumeRow: View {
-    let volume: DiskSnapshot
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(volume.name)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            if volume.isStartup {
-                Text("Startup")
-                    .foregroundStyle(.tertiary)
-                    .fixedSize()
-            }
-            Spacer(minLength: 6)
-            Text(volume.fileSystem)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .frame(width: 42, alignment: .leading)
-            VolumeUsedText(volume: volume)
-                .frame(minWidth: 92, alignment: .trailing)
-        }
-        .font(.pmCaption)
-        .helpIfPresent([volume.name, volume.fileSystem, volume.locationText].filter { !$0.isEmpty }.joined(separator: " · "))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(volume.isStartup ? "\(volume.name), startup volume" : volume.name)
-        .accessibilityValue(volume.spokenVolume)
     }
 }
 

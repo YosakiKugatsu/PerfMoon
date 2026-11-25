@@ -133,8 +133,39 @@ public final class FixtureProvider: MetricProvider {
         if job == .processMemory {
             let labels = ["Example Model", "Example Browser", "Example VM", "Example Editor", "Example Helper", "Example App 6", "Example App 7", "Example App 8", "Example App 9", "Example App 10"]
             processMemory = ProcessMemorySnapshot(entries: labels.enumerated().map {
-                ProcessMemoryEntry(pid: Int32(2000 + $0.offset), name: $0.element, memoryBytes: Double(12_000_000_000 / ($0.offset + 1)))
+                let rank = $0.offset + 1
+                var row = ProcessMemoryEntry(pid: Int32(2000 + $0.offset), name: $0.element, memoryBytes: Double(12_000_000_000 / rank))
+                row.cpuPercent = 296 / Double(rank)
+                row.readBytesPerSecond = Double((rank * 17) % 11) * 280_000
+                row.writeBytesPerSecond = Double((rank * 9) % 11) * 105_000
+                return row
             }, status: .valid, timestamp: time)
+            processMemory.byCPU = processMemory.entries.sorted { $0.cpuPercent > $1.cpuPercent }
+            processMemory.byRead = processMemory.entries.sorted { $0.readBytesPerSecond > $1.readBytesPerSecond }
+            processMemory.byWrite = processMemory.entries.sorted { $0.writeBytesPerSecond > $1.writeBytesPerSecond }
+            processMemory.rateWindow = 5
+        }
+        if job == .diskActivity {
+            let world = world(at: time)
+            return .diskActivity([("disk0", UInt64(1), 1.0), ("disk5", UInt64(2), 0.3)].map { device, id, factor in
+                DiskActivity(id: id, device: device,
+                             bytes: TransferRates(incoming: world.total * 420_000 * factor, outgoing: world.gpuUsage * 210_000 * factor,
+                                                  at: time, window: request.interval, source: .diskActivity),
+                             operations: TransferRates(incoming: world.total * 5 * factor, outgoing: world.gpuUsage * 3 * factor,
+                                                       at: time, window: request.interval, source: .diskActivity, unit: .perSecond))
+            })
+        }
+        if job == .network {
+            let links = [NetworkInterfaceInfo(id: "en0", index: 1, name: "Wi-Fi", isHardware: true),
+                         NetworkInterfaceInfo(id: "utun2", index: 2, name: "Tunnel", isHardware: false)]
+            let selected = links.first { $0.id == (request.networkInterface ?? "en0") }
+            let world = world(at: time)
+            let rates = selected.map { link in
+                TransferRates(incoming: world.total * 120_000 / Double(link.index), outgoing: world.gpuUsage * 35_000 / Double(link.index),
+                              at: time, window: request.interval, source: .network)
+            } ?? TransferRates(status: .unavailable(.interfaceDisconnected), source: .network)
+            return .network(NetworkActivity(interfaces: links, selected: selected, rates: rates,
+                                            receivedBytes: selected == nil ? nil : 12_678_435_210, sentBytes: selected == nil ? nil : 3_801_372_984))
         }
         if job == .disk {
             let boot = DiskSnapshot(id: "fixture-startup", name: "Macintosh HD", mountPath: "/", deviceIdentifier: "disk3s1s1",
@@ -169,6 +200,9 @@ public final class FixtureProvider: MetricProvider {
             values[.cpuS] = world.sMean
             values[.cpuP] = world.pMean
             for (index, load) in world.cores.enumerated() { values[.core(index)] = load }
+        case .corePower:
+            let load = max(1, world.cores.reduce(0, +))
+            for (index, usage) in world.cores.enumerated() { values[.corePower(index)] = world.cpuPower * usage / load }
         case .cpuFrequency:
             values[.cpuFrequencyS] = world.sFrequency
             values[.cpuFrequencyP] = world.pFrequency
@@ -194,7 +228,7 @@ public final class FixtureProvider: MetricProvider {
             for id in request.sensorIDs where !missingSensors.contains(id) {
                 if let value = world.temperatures[id] { values[.sensor(id)] = value }
             }
-        case .selfUsage, .thermal, .processMemory, .disk:
+        case .selfUsage, .thermal, .processMemory, .disk, .diskActivity, .network:
             break
         }
         for key in request.warmingKeys { values[key] = nil }
@@ -245,7 +279,9 @@ public final class FixtureProvider: MetricProvider {
             add(.cpuTotal, world.total)
             add(.cpuS, world.sMean)
             add(.cpuP, world.pMean)
+            let totalLoad = max(1, world.cores.reduce(0, +))
             for core in CoreID.all {
+                add(.corePower(core), world.cpuPower * world.cores[core.flatIndex] / totalLoad)
                 add(.coreUsage(core), world.cores[core.flatIndex])
                 if let sensor = sensors.first(where: { $0.mappedCore == core }),
                    !missingSensors.contains(sensor.id) {
@@ -259,7 +295,12 @@ public final class FixtureProvider: MetricProvider {
             add(.gpuFrequency, world.gpuFrequency)
             add(.gpuPower, world.gpuPower)
             add(.anePower, world.anePower)
-            add(.memoryUsed, world.memory[.memoryUsed])
+            for (key, value) in world.memory {
+                if let series = key.series { add(series, value) }
+            }
+            if let used = world.memory[.memoryUsed] {
+                add(.memoryDetail(.available), max(0, machine.physicalMemory - used))
+            }
             add(.memoryPressure, Double(world.pressure.rawValue))
             add(.powerInput, world.powerInput)
             add(.powerSystem, world.powerSystem)

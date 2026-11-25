@@ -30,6 +30,9 @@ public final class NativeMetricProvider: MetricProvider {
     public private(set) var gpuThrottleStatus: ThrottleStatus = .unavailable
     public private(set) var processMemory = ProcessMemorySnapshot()
     public var isLive: Bool { true }
+    private var corePower: CorePowerSampler?
+    private var useCPURefresh = false
+    var powerSamplerPIDs: [pid_t] { corePower?.pid.map { [$0] } ?? [] }
 
     private let resources = NativeResources()
     private var opened: Set<SourceID> = []
@@ -40,7 +43,10 @@ public final class NativeMetricProvider: MetricProvider {
     private var lastGPUThrottleEvidence: TimeInterval = -.infinity
     private var lastGPUThrottleSample: TimeInterval = -.infinity
     private var gpuThrottleValidity: TimeInterval = 6
-    private var names: [Int32: (start: UInt64, name: String)] = [:]
+    private var processScanner: ProcessActivityScanner?
+    private var volumeInventory = StartupVolumes()
+    private var diskActivitySampler: DiskActivitySampler?
+    private var networkSampler: NetworkActivitySampler?
     private var temperatureTick: TimeInterval?
     private var temperatureValues: [String: Double?] = [:]
     private let reusableMIB: [Int32]? = {
@@ -104,6 +110,11 @@ public final class NativeMetricProvider: MetricProvider {
             if resources.battery == 0 { resources.battery = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery")) }
             guard resources.battery != 0 else { return .failed(.unsupported) }
         }
+        if source == .corePower {
+            guard geteuid() == 0 else { return .failed(.permissionDenied) }
+            guard let sampler = CorePowerSampler(topology: machine.cpuTopology) else { return .failed(.unsupported) }
+            corePower = sampler
+        }
         opened.insert(source)
         rebaseline(source, at: time)
         return .opened
@@ -111,6 +122,7 @@ public final class NativeMetricProvider: MetricProvider {
 
     public func close(_ source: SourceID) {
         opened.remove(source)
+        if source == .corePower { corePower?.stop(); corePower = nil }
         if Self.reportSources.contains(source), opened.isDisjoint(with: Self.reportSources) {
             pm_report_close(resources.report); resources.report = nil
             lastGPUThrottleSample = -.infinity
@@ -123,15 +135,23 @@ public final class NativeMetricProvider: MetricProvider {
         if source == .battery, resources.battery != 0 { IOObjectRelease(resources.battery); resources.battery = 0 }
         if source == .cpuActivity { cpuUsage.reset() }
         if source == .memory { previousMemory = nil }
+        if source == .network { networkSampler = nil }
+        if source == .diskActivity { diskActivitySampler = nil }
         if source == .processMemory {
             processMemory = ProcessMemorySnapshot()
-            names.removeAll()
+            processScanner = nil
         }
     }
 
     public func rebaseline(_ source: SourceID, at time: TimeInterval) {
         if source == .cpuActivity { cpuUsage.reset() }
         if source == .memory { previousMemory = nil }
+        if source == .processMemory {
+            processScanner = ProcessActivityScanner()
+            processMemory = ProcessMemorySnapshot()
+        }
+        if source == .network { networkSampler = NetworkActivitySampler() }
+        if source == .diskActivity { diskActivitySampler = DiskActivitySampler() }
         // A shared IOReport connection coalesces frequency/energy/GPU reads.
         if Self.reportSources.contains(source) { pm_report_rebaseline(resources.report) }
     }
@@ -161,6 +181,22 @@ public final class NativeMetricProvider: MetricProvider {
             return values.isEmpty ? .failed(.transient) : .values(values)
         case .battery: return sampleBattery()
         case .memory: return sampleMemory()
+        case .corePower:
+            guard let existing = corePower else { return .failed(.unsupported) }
+            let interval = max(1, min(5, request.interval))
+            let stalled = existing.refreshStalled
+            if stalled && existing.usesCPURefresh { return .failed(.unsupported) }
+            if stalled { useCPURefresh = true }
+            if existing.interval == 0 || stalled {
+                if stalled {
+                    existing.stop()
+                    corePower = CorePowerSampler(topology: machine.cpuTopology)
+                }
+                guard corePower?.start(useCPURefresh: useCPURefresh) == true else { return .failed(.transient) }
+            }
+            return corePower?.sample(interval: interval) ?? .failed(.transient)
+        case .network: return networkSampler?.sample(preferred: request.networkInterface, at: time) ?? .failed(.transient)
+        case .diskActivity: return diskActivitySampler?.sample(at: time) ?? .failed(.transient)
         case .disk: return .noNewData // The scheduler runs diskBackgroundSample off the main actor.
         case .memoryPressure:
             var value: Int32 = 0
@@ -171,9 +207,7 @@ public final class NativeMetricProvider: MetricProvider {
         case .thermal:
             sampleThermal()
             return .values([:])
-        case .processMemory:
-            sampleProcesses(at: time)
-            return .values([:])
+        case .processMemory: return .noNewData // Handled by processBackgroundSample.
         case .selfUsage: return .values([:])
         }
     }
@@ -322,42 +356,25 @@ public final class NativeMetricProvider: MetricProvider {
         )
     }
 
-    private func sampleProcesses(at time: TimeInterval) {
-        let capacity = max(256, Int(proc_listallpids(nil, 0)) + 64)
-        var pids = [Int32](repeating: 0, count: capacity)
-        let count = pids.withUnsafeMutableBytes { proc_listallpids($0.baseAddress, Int32($0.count)) }
-        guard count > 0 else { processMemory = ProcessMemorySnapshot(status: .unavailable(.retrying)); return }
-        var usage: [(pid: Int32, bytes: UInt64, start: UInt64)] = []
-        var inaccessible = 0
-        usage.reserveCapacity(Int(count))
-        for pid in pids.prefix(min(Int(count), capacity)) where pid > 0 {
-            var info = rusage_info_v4()
-            let result = withUnsafeMutablePointer(to: &info) { pointer in
-                pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V4, $0) }
-            }
-            if result == 0 && info.ri_phys_footprint > 0 { usage.append((pid, info.ri_phys_footprint, info.ri_proc_start_abstime)) }
-            else if result != 0 && (errno == EPERM || errno == EACCES) { inaccessible += 1 }
-        }
-        let top = usage.sorted { $0.bytes > $1.bytes }.prefix(10)
-        let topIDs = Set(top.map(\.pid)); names = names.filter { topIDs.contains($0.key) }
-        let entries = top.map { item -> ProcessMemoryEntry in
-            let name: String
-            if let cached = names[item.pid], cached.start == item.start { name = cached.name }
-            else { name = Self.processName(item.pid); names[item.pid] = (item.start, name) }
-            return ProcessMemoryEntry(pid: item.pid, name: name, memoryBytes: Double(item.bytes))
-        }
-        processMemory = ProcessMemorySnapshot(entries: entries, status: .valid, timestamp: time, inaccessibleProcessCount: inaccessible)
+    public func invalidateDiskDevices() {
+        volumeInventory = StartupVolumes()
+        diskActivitySampler?.invalidateDevices()
     }
 
-    private static func processName(_ pid: Int32) -> String {
-        var path = [CChar](repeating: 0, count: 4096)
-        if proc_pidpath(pid, &path, UInt32(path.count)) > 0 {
-            let value = Self.decodeCString(path)
-            return URL(fileURLWithPath: value).lastPathComponent
+    public var processBackgroundSample: (@MainActor (Double, Bool) async -> ProcessMemorySnapshot)? {
+        guard let scanner = processScanner else { return nil }
+        return { [weak self] time, includeRates in
+            let start = self?.recordTimings == true ? ProcessInfo.processInfo.systemUptime : nil
+            let snapshot = await scanner.sample(at: time, includeRates: includeRates)
+            if !Task.isCancelled, let self, processScanner === scanner {
+                processMemory = snapshot
+                if let start {
+                    let elapsed = (ProcessInfo.processInfo.systemUptime - start) * 1000
+                    maximumSampleMilliseconds[.processMemory] = max(maximumSampleMilliseconds[.processMemory] ?? 0, elapsed)
+                }
+            }
+            return snapshot
         }
-        var name = [CChar](repeating: 0, count: 1024)
-        if proc_name(pid, &name, UInt32(name.count)) > 0 { return Self.decodeCString(name) }
-        return "Process \(pid)"
     }
 
     private func smc(_ key: String) -> Double? {
@@ -461,6 +478,6 @@ public final class NativeMetricProvider: MetricProvider {
 
 extension NativeMetricProvider {
     public var diskBackgroundSample: (@Sendable (Double) -> SampleOutcome)? {
-        { StartupVolumes.sample(at: $0) }
+        { [volumeInventory] in volumeInventory.sample(at: $0) }
     }
 }

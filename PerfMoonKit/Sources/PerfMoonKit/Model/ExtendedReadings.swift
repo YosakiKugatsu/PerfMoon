@@ -3,7 +3,7 @@
 
 import Foundation
 
-public struct ThrottleStatus: Sendable, Equatable {
+public struct ThrottleStatus: Sendable, Equatable, Codable {
     public var isActive: Bool
     public var isAvailable: Bool
     public var explanation: String
@@ -18,11 +18,23 @@ public struct ThrottleStatus: Sendable, Equatable {
     public static let normal = ThrottleStatus(isActive: false)
 }
 
-public struct ProcessMemoryEntry: Sendable, Equatable, Identifiable {
+public struct ProcessMemoryEntry: Sendable, Equatable, Identifiable, Codable {
     public var pid: Int32
     public var name: String
     public var memoryBytes: Double
+    public var cpuPercent: Double = 0
+    public var readBytesPerSecond: Double = 0
+    public var writeBytesPerSecond: Double = 0
     public var id: Int32 { pid }
+
+    public func value(for ranking: ProcessRanking) -> Double {
+        switch ranking {
+        case .memory: memoryBytes
+        case .cpu: cpuPercent
+        case .diskRead: readBytesPerSecond
+        case .diskWrite: writeBytesPerSecond
+        }
+    }
 
     public init(pid: Int32, name: String, memoryBytes: Double) {
         self.pid = pid
@@ -31,11 +43,24 @@ public struct ProcessMemoryEntry: Sendable, Equatable, Identifiable {
     }
 }
 
-public struct ProcessMemorySnapshot: Sendable, Equatable {
+public struct ProcessMemorySnapshot: Sendable, Equatable, Codable {
     public var entries: [ProcessMemoryEntry]
     public var status: ReadingStatus
     public var timestamp: TimeInterval?
+    public var byCPU: [ProcessMemoryEntry] = []
+    public var byRead: [ProcessMemoryEntry] = []
+    public var byWrite: [ProcessMemoryEntry] = []
+    public var rateWindow: TimeInterval?
     public var inaccessibleProcessCount: Int
+
+    public func entries(for ranking: ProcessRanking) -> [ProcessMemoryEntry] {
+        switch ranking {
+        case .memory: entries
+        case .cpu: byCPU
+        case .diskRead: byRead
+        case .diskWrite: byWrite
+        }
+    }
 
     public init(entries: [ProcessMemoryEntry] = [], status: ReadingStatus = .warming, timestamp: TimeInterval? = nil, inaccessibleProcessCount: Int = 0) {
         self.entries = entries
@@ -44,4 +69,16 @@ public struct ProcessMemorySnapshot: Sendable, Equatable {
         self.inaccessibleProcessCount = inaccessibleProcessCount
     }
 
+}
+public enum ProcessRanking: String, CaseIterable, Sendable, Identifiable {
+    case memory, cpu, diskRead, diskWrite
+    public var id: Self { self }
+    public var title: String {
+        switch self {
+        case .memory: "Memory"
+        case .cpu: "CPU"
+        case .diskRead: "Disk Read"
+        case .diskWrite: "Disk Write"
+        }
+    }
 }

@@ -12,6 +12,8 @@ struct PanelActions {
     var useCPUMax: () -> Void
     /// Expanding the Memory card requests the process list; collapsing releases it.
     var setProcessListVisible: (Bool) -> Void
+    var setCoreMetric: (Demand?) -> Void
+    var setTransferDemand: (Demand?) -> Void
     var close: () -> Void
 }
 
@@ -31,10 +33,11 @@ struct PanelView: View {
                 if let prompt = model.prompt {
                     PromptRow(prompt: prompt, actions: actions)
                 }
-                CPUPanelSection(model: model)
+                CPUPanelSection(model: model, setCoreMetric: actions.setCoreMetric)
                 GPUPanelSection(model: model)
                 MemoryPanelSection(model: model, onProcessListVisibilityChange: actions.setProcessListVisible)
-                DiskPanelSection(model: model)
+                DiskPanelSection(model: model, setTransferDemand: actions.setTransferDemand,
+                                 openNetwork: { actions.openWindow(.network) })
                 PowerPanelSection(model: model)
             }
             .padding(.horizontal, 12)

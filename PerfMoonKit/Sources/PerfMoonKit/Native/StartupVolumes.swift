@@ -3,10 +3,33 @@
 
 import Darwin
 import Foundation
+import IOKit
 
 /// Resolves mounted volumes to whole disks. APFS snapshots use the owning volume's
 /// consumption; shared space is accounted only once, at container level.
-enum StartupVolumes {
+final class StartupVolumes: @unchecked Sendable {
+    // Each mount/rename event installs a fresh inventory. Any in-flight query
+    // finishes against its old cache on the utility queue.
+    private let lock = NSLock()
+    private struct DriveInfo {
+        var name: String?
+        var isInternal: Bool?
+        var registryID: UInt64?
+    }
+    private var metadata: [String: DriveInfo] = [:]
+    private var expires: TimeInterval = 0
+
+    func sample(at time: TimeInterval) -> SampleOutcome {
+        lock.withLock {
+            let uptime = ProcessInfo.processInfo.systemUptime
+            if uptime >= expires {
+                metadata.removeAll(keepingCapacity: true)
+                expires = uptime + 300
+            }
+            return Self.sample(at: time, metadata: &metadata)
+        }
+    }
+
     private typealias Record = [String: Any]
 
     private struct Space {
@@ -38,7 +61,7 @@ enum StartupVolumes {
         }
     }
 
-    static func sample(at time: Double) -> SampleOutcome {
+    private static func sample(at time: Double, metadata: inout [String: DriveInfo]) -> SampleOutcome {
         guard let diskList = plist(["list", "-plist"])?["AllDisksAndPartitions"] as? [Record],
               let apfsList = plist(["apfs", "list", "-plist"])?["Containers"] as? [Record],
               let mounts = mountedFilesystems() else { return .failed(.transient) }
@@ -121,23 +144,27 @@ enum StartupVolumes {
                                        fileSystem: filesystem(fsType), sharesCapacity: fsType == "apfs", individualUsed: individualUsed)
             groups[group, default: []].append(reading)
         }
+        metadata = metadata.filter { records[$0.key] != nil }
         let drives = Set(records.keys).union(groups.keys).map { id -> DiskDriveSnapshot in
             let volumes = (groups[id] ?? []).sorted { a, b in
                 if a.isStartup != b.isStartup { return a.isStartup }
                 let order = a.name.localizedStandardCompare(b.name)
                 return order == .orderedSame ? a.id < b.id : order == .orderedAscending
             }
-            let info = records[id] == nil ? nil : plist(["info", "-plist", id])
-            let internalDrive = info?["Internal"] as? Bool ?? volumes.first?.isInternal
+            if records[id] != nil, metadata[id] == nil, let info = plist(["info", "-plist", id]) {
+                metadata[id] = DriveInfo(name: info["MediaName"] as? String, isInternal: info["Internal"] as? Bool,
+                                         registryID: mediaRegistryID(id))
+            }
+            let internalDrive = metadata[id]?.isInternal ?? volumes.first?.isInternal
             let shared = containers.contains { $0.id == id && $0.owners.count > 1 }
-            let name = info?["MediaName"] as? String ?? (shared ? "Shared APFS Storage" : volumes.first?.name ?? id)
+            let name = metadata[id]?.name ?? (shared ? "Shared APFS Storage" : volumes.first?.name ?? id)
             let covered = parts[id, default: []].isSubset(of: accounted[id, default: []])
             let capacity = spaces[id]?.values
             let total = covered ? capacity?.reduce(0) { $0 + $1.total } : nil
             let free = covered ? capacity?.reduce(0) { $0 + $1.free } : nil
             return DiskDriveSnapshot(id: id, name: name, isInternal: internalDrive, volumes: volumes,
                                      totalBytes: total, availableBytes: free, at: time,
-                                     systemCapacity: startupCapacityByGroup[id])
+                                     systemCapacity: startupCapacityByGroup[id], registryID: metadata[id]?.registryID)
         }.sorted { a, b in
             let bootA = a.volumes.contains(where: \.isStartup)
             let bootB = b.volumes.contains(where: \.isStartup)
@@ -145,6 +172,14 @@ enum StartupVolumes {
             return a.id.localizedStandardCompare(b.id) == .orderedAscending
         }
         return drives.isEmpty ? .failed(.transient) : .diskDrives(drives)
+    }
+
+    private static func mediaRegistryID(_ name: String) -> UInt64? {
+        let media = IOServiceGetMatchingService(kIOMainPortDefault, IOBSDNameMatching(kIOMainPortDefault, 0, name))
+        guard media != 0 else { return nil }
+        defer { IOObjectRelease(media) }
+        var id: UInt64 = 0
+        return IORegistryEntryGetRegistryEntryID(media, &id) == KERN_SUCCESS ? id : nil
     }
 
     private static func mountedFilesystems() -> ArraySlice<statfs>? {
@@ -156,6 +191,14 @@ enum StartupVolumes {
         }
         guard length > 0, Int(length) <= mounts.count else { return nil }
         return mounts.prefix(Int(length))
+    }
+
+    static func health(for device: String) -> DiskHealthReport? {
+        // The collector accepts a whole-disk BSD identifier only.
+        guard device.hasPrefix("disk"), (5...16).contains(device.utf8.count),
+              device.utf8.dropFirst(4).allSatisfy({ (48...57).contains($0) }),
+              let info = plist(["info", "-plist", device]) else { return nil }
+        return DiskHealthReport(device: device, info: info)
     }
 
     private static func plist(_ arguments: [String]) -> Record? {

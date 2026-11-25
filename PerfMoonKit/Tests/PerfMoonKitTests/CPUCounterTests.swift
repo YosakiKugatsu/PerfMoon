@@ -72,7 +72,7 @@ struct CPUCounterTests {
     func efficiencyAndPerformance() throws {
         let topology = CPUTopology(logicalCPUCount: 4, performanceLevels: [("Performance", 2), ("Efficiency", 2)],
                                    firmwareTypes: [0: "P", 1: "E", 2: "P", 3: "E"])
-        #expect(topology.clusters.map(\.title) == ["E-Core", "P-Core"])
+        #expect(topology.clusters.map(\.title) == ["P-Core", "E-Core"])
         #expect(topology.cores.map(\.label) == ["E0", "E1", "P0", "P1"])
         #expect(topology.cores.map(\.machIndex) == [1, 3, 0, 2])
         var sampler = CPUUsageAccumulator(topology: topology)
@@ -105,8 +105,8 @@ struct CPUCounterTests {
         let tags = Dictionary(uniqueKeysWithValues: (0..<10).map { ($0, superCPUs.contains($0) ? "P" : "E") })
         let topology = CPUTopology(logicalCPUCount: 10, performanceLevels: [("Super", 4), ("Efficiency", 6)],
                                    firmwareTypes: tags)
-        #expect(topology.clusters.map(\.title) == ["E-Core", "S-Core"])
-        #expect(topology.clusters.map(\.count) == [6, 4])
+        #expect(topology.clusters.map(\.title) == ["S-Core", "E-Core"])
+        #expect(topology.clusters.map(\.count) == [4, 6])
         #expect(topology.cluster(.e)?.cores.map(\.machIndex) == [0, 2, 3, 5, 6, 8])
         #expect(topology.cluster(.s)?.cores.map(\.machIndex) == [1, 4, 7, 9])
         #expect(topology.cluster(.p) == nil)
@@ -126,8 +126,8 @@ struct CPUCounterTests {
         let tags = [0: "M", 1: "P", 2: "E", 3: "M", 4: "E", 5: "E", 6: "M", 7: "E", 8: "E", 9: "P", 10: "M", 11: "E"]
         let topology = CPUTopology(logicalCPUCount: 12,
             performanceLevels: [("Super", 2), ("Performance", 4), ("Efficiency", 6)], firmwareTypes: tags)
-        #expect(topology.clusters.map(\.role) == [.e, .s, .p])
-        #expect(topology.clusters.map(\.count) == [6, 2, 4])
+        #expect(topology.clusters.map(\.role) == [.s, .p, .e])
+        #expect(topology.clusters.map(\.count) == [2, 4, 6])
         #expect(topology.cores.map(\.machIndex) == [2, 4, 5, 7, 8, 11, 1, 9, 0, 3, 6, 10])
         #expect(topology.cores.map(\.label) == ["E0", "E1", "E2", "E3", "E4", "E5", "S0", "S1", "P0", "P1", "P2", "P3"])
 

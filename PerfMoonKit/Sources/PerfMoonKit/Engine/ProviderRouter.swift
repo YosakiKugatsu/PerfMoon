@@ -21,6 +21,11 @@ final class ProviderRouter: MetricProvider {
     var gpuThrottleStatus: ThrottleStatus { current.gpuThrottleStatus }
     var processMemory: ProcessMemorySnapshot { current.processMemory }
     var isLive: Bool { current.isLive }
+    var processBackgroundSample: (@MainActor (Double, Bool) async -> ProcessMemorySnapshot)? { current.processBackgroundSample }
+    var preparesBatches: Bool { current.preparesBatches }
+    func prepare(_ requests: [JobID: SampleRequest], at time: TimeInterval) { current.prepare(requests, at: time) }
+    func selfUsage(at time: TimeInterval, window: TimeInterval) -> SelfUsage? { current.selfUsage(at: time, window: window) }
+    func invalidateDiskDevices() { current.invalidateDiskDevices() }
     var diskBackgroundSample: (@Sendable (Double) -> SampleOutcome)? { current.diskBackgroundSample }
     func open(_ source: SourceID, at time: TimeInterval) -> OpenResult { current.open(source, at: time) }
     func close(_ source: SourceID) { current.close(source) }

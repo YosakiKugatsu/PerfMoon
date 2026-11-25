@@ -11,6 +11,7 @@ import ServiceManagement
 final class AppModel {
     let settings = AppSettings()
     let fixtures = FixtureProvider()
+    let collector: RootMetricProvider
     let engine: MonitorEngine
     let statusItem = StatusItemController()
     private(set) lazy var panel = PanelController(app: self)
@@ -33,12 +34,16 @@ final class AppModel {
     #endif
 
     init() {
-        engine = MonitorEngine(fixtures: fixtures, liveProvider: NativeMetricProvider())
+        collector = RootMetricProvider(executable: Bundle.main.executableURL!)
+        engine = MonitorEngine(fixtures: fixtures, liveProvider: collector)
     }
 
     func launch() {
         settings.launchAtLogin = SMAppService.mainApp.status == .enabled
         settings.onChange = { [weak self] change in self?.settingsChanged(change) }
+        if !settings.networkInterface.isEmpty { engine.setNetworkInterface(settings.networkInterface) }
+        updateNetworkDemand()
+        engine.setDemand(.continuousHistory, active: settings.continuousHistory)
         engine.start(scenario: .typical, interval: settings.updateInterval, temperatureSource: settings.temperatureSource)
 
         statusItem.onClick = { [weak self] button in self?.panel.toggle(from: button) }
@@ -48,9 +53,12 @@ final class AppModel {
             if self.settings.isLiveData != engine.isLive {
                 self.settings.isLiveData = engine.isLive
             }
+            if self.settings.collectorConnected != self.collector.isRootConnected {
+                self.settings.collectorConnected = self.collector.isRootConnected
+            }
             self.refreshStatusItem()
             if self.diagnostics.isEnabled {
-                self.diagnostics.record(engine, settingsTab: self.settingsWindow?.isLive == true ? self.settingsWindow?.currentTab.rawValue : nil,
+                self.diagnostics.record(engine, collector: self.collector, settingsTab: self.settingsWindow?.isLive == true ? self.settingsWindow?.currentTab.rawValue : nil,
                     details: ["statusWidth": self.statusItem.button?.bounds.width ?? 0,
                               "statusHeight": self.statusItem.button?.bounds.height ?? 0,
                               "glyphHeight": self.statusItem.currentContent?.height ?? 0,
@@ -69,6 +77,7 @@ final class AppModel {
         #endif
         // First run introduces the app; later launches stay in the menu bar until
         // the user requests a window. Reopening the app still opens the window.
+        if !collector.isRootConnected { authorizeCollector() }
         let firstLaunch = settings.consumeFirstLaunch()
         if firstLaunch {
             openMainWindow(page: nil)
@@ -79,12 +88,32 @@ final class AppModel {
 
     var isPaused: Bool { engine.core.userPaused }
 
+    func authorizeCollector() {
+        guard !settings.authorizingCollector, !collector.isRootConnected else { return }
+        settings.authorizingCollector = true
+        Task {
+            await collector.authorize()
+            settings.authorizingCollector = false
+            if collector.isRootConnected, engine.isLive { engine.useLiveData() }
+        }
+    }
+
+    func retryStopped() {
+        if engine.isLive && !collector.isRootConnected { authorizeCollector() }
+        else { engine.retryStopped() }
+    }
+
+    func retrySource(_ source: SourceID) {
+        if engine.isLive && !collector.isRootConnected { authorizeCollector() }
+        else { engine.retry(source) }
+    }
+
     func togglePause() {
         engine.toggleUserPaused()
     }
 
-    func setMainMemoryProcessListVisible(_ visible: Bool) {
-        mainWindow?.setMemoryProcessListVisible(visible)
+    func setProcessListVisible(_ visible: Bool, on page: Page) {
+        mainWindow?.setProcessListVisible(visible, on: page)
     }
 
     func openMainWindow(page: Page?) {
@@ -189,13 +218,24 @@ final class AppModel {
 
     // MARK: Settings
 
+    private func updateNetworkDemand() {
+        engine.setDemand(.menuNetwork, active: settings.menuTopLine.usesNetwork || settings.menuBottomLine.usesNetwork)
+    }
+
     private func settingsChanged(_ change: AppSettings.Change) {
         switch change {
+        case .continuousHistory:
+            engine.setDemand(.continuousHistory, active: settings.continuousHistory)
         case .updateInterval:
             engine.setUserInterval(settings.updateInterval)
         case .temperatureSource:
             engine.setTemperatureSource(settings.temperatureSource)
-        case .menuBar, .temperatureUnit:
+        case .networkInterface:
+            engine.setNetworkInterface(settings.networkInterface.isEmpty ? nil : settings.networkInterface)
+        case .menuBar:
+            updateNetworkDemand()
+            refreshStatusItem()
+        case .temperatureUnit:
             refreshStatusItem()
         case .page:
             mainWindow?.pageDidChange()

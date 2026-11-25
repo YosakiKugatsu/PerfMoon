@@ -32,6 +32,7 @@ struct OverviewPage: View {
                 memoryCard
             }
             diskCard
+            networkCard
             powerCard
         }
     }
@@ -171,6 +172,23 @@ struct OverviewPage: View {
             .accessibilityValue(capacity.spokenCapacity
                 + (drive?.capacityScopeName.map { ", for \($0)" } ?? "")
                 + (others > 0 ? ", \(othersText) connected" : ""))
+            if let activity = model.diskActivity.first(where: { $0.device == drive?.id }) {
+                InlineTransfer(rates: activity.bytes, labels: ("Read", "Write"))
+            }
+        }
+    }
+
+    private var networkCard: some View {
+        let network = model.network
+        return OverviewCard(title: "Network", subtitle: network.selected?.displayTitle, page: .network, navigate: navigate) {
+            EmptyView()
+        } content: {
+            HStack(spacing: 20) {
+                TransferPair(rates: network.rates, incoming: "Download", outgoing: "Upload")
+                TransferChart(incoming: .networkDownload, outgoing: .networkUpload, labels: ("Download", "Upload"),
+                              context: context, compact: true, reason: network.rates.incoming.unavailableReason)
+                    .frame(height: 44)
+            }
         }
     }
 

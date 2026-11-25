@@ -47,4 +47,13 @@ void pm_report_rebaseline(PMReport *context);
 /// from the transport result.
 int pm_report_read(PMReport *context, PMReportValues *values);
 bool pm_report_sample(PMReport *context, PMReportValues *values);
+typedef struct PMCoreEnergy PMCoreEnergy;
+typedef struct {
+    uint8_t tier;       // Firmware cluster-type: E, M or P.
+    uint32_t cluster, slot;
+} PMCoreLocation;
+
+PMCoreEnergy *pm_core_energy_open(const PMCoreLocation *locations, size_t count);
+void pm_core_energy_close(PMCoreEnergy *context);
+bool pm_core_energy_read(PMCoreEnergy *context, double *watts, size_t count, double *elapsed);
 #endif

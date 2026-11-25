@@ -11,7 +11,9 @@ import PerfMoonKit
 final class AppSettings {
     enum Change {
         case updateInterval
+        case continuousHistory
         case temperatureSource
+        case networkInterface
         case menuBar
         case temperatureUnit
         case page
@@ -23,7 +25,18 @@ final class AppSettings {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let hadPreviousLaunch: Bool
     @ObservationIgnored private var pageWrite: Task<Void, Never>?
+    var showsStatistics = false
     var isLiveData = false
+    var collectorConnected = false
+    var authorizingCollector = false
+
+    var continuousHistory: Bool {
+        didSet {
+            guard continuousHistory != oldValue else { return }
+            save(continuousHistory, "continuousHistory")
+            onChange?(.continuousHistory)
+        }
+    }
 
     var updateInterval: UpdateInterval {
         didSet { save(updateInterval.rawValue, "updateInterval"); onChange?(.updateInterval) }
@@ -38,6 +51,15 @@ final class AppSettings {
             guard temperatureSource != oldValue else { return }
             save(temperatureSource.storageValue, "temperatureSource")
             onChange?(.temperatureSource)
+        }
+    }
+
+    /// Empty selects the active physical service, including when a VPN is connected.
+    var networkInterface: String {
+        didSet {
+            guard networkInterface != oldValue else { return }
+            save(networkInterface, "networkInterface")
+            onChange?(.networkInterface)
         }
     }
 
@@ -73,9 +95,11 @@ final class AppSettings {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         hadPreviousLaunch = defaults.object(forKey: "launchAtLogin") != nil
+        continuousHistory = defaults.object(forKey: "continuousHistory") == nil || defaults.bool(forKey: "continuousHistory")
         updateInterval = UpdateInterval(rawValue: defaults.double(forKey: "updateInterval")) ?? .one
         temperatureUnit = defaults.string(forKey: "temperatureUnit").flatMap(TemperatureUnit.init(rawValue:)) ?? .celsius
         temperatureSource = defaults.string(forKey: "temperatureSource").map(TemperatureSource.init(storageValue:)) ?? .cpuMax
+        networkInterface = defaults.string(forKey: "networkInterface") ?? ""
         menuTopLine = defaults.string(forKey: "menuTopLine").flatMap(MenuBarMetric.init(rawValue:)) ?? .cpuUsage
         menuBottomLine = defaults.string(forKey: "menuBottomLine").flatMap(MenuBarMetric.init(rawValue:)) ?? .systemPower
         showsMiniGraph = defaults.object(forKey: "showsMiniGraph") as? Bool ?? false

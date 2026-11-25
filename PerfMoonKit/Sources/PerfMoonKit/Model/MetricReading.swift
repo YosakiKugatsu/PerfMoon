@@ -4,7 +4,7 @@
 import Foundation
 
 /// How a value was obtained. Shown only in details and Data Sources.
-public enum MetricQuality: String, Sendable, CaseIterable {
+public enum MetricQuality: String, Sendable, CaseIterable, Codable {
     case observed
     case estimated
     case derived
@@ -19,9 +19,10 @@ public enum MetricQuality: String, Sendable, CaseIterable {
 }
 
 /// Why a reading has no value. Every message is at most 40 characters.
-public enum UnavailableReason: String, Sendable, CaseIterable {
+public enum UnavailableReason: String, Sendable, CaseIterable, Codable {
     case unsupported
     case unknownOSVersion
+    case interfaceDisconnected
     case sensorMissing
     case retrying
     case stopped
@@ -31,6 +32,7 @@ public enum UnavailableReason: String, Sendable, CaseIterable {
         switch self {
         case .unsupported: "Not available on this Mac"
         case .unknownOSVersion: "Not supported on this macOS version"
+        case .interfaceDisconnected: "No active interface"
         case .sensorMissing: "Sensor no longer reported"
         case .retrying: "Couldn't read. Retrying…"
         case .stopped: "Couldn't read. Click Retry."
@@ -47,7 +49,7 @@ public enum UnavailableReason: String, Sendable, CaseIterable {
     }
 }
 
-public enum ReadingStatus: Sendable, Equatable {
+public enum ReadingStatus: Sendable, Equatable, Codable {
     case valid
     case warming
     case stale
@@ -56,18 +58,19 @@ public enum ReadingStatus: Sendable, Equatable {
     public static let warmingMessage = "Collecting…"
 }
 
-public enum MetricUnit: Sendable, Equatable {
+public enum MetricUnit: Sendable, Equatable, Codable {
     case percent
     case watts
     case celsius
     case gigahertz
     case bytes
+    case bytesPerSecond
     case perSecond
     case level
 }
 
 /// The single data contract between collection and every view.
-public struct MetricReading: Sendable, Equatable {
+public struct MetricReading: Sendable, Equatable, Codable {
     public var value: Double?
     public var unit: MetricUnit
     public var status: ReadingStatus

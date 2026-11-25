@@ -7,8 +7,11 @@ import SwiftUI
 struct CPUPage: View {
     let model: DashboardModel
     let context: ChartContext
+    let width: CGFloat
+    let setCoreInspectorVisible: (Bool) -> Void
     let openSensorSettings: () -> Void
     @Bindable var settings: AppSettings
+    let setProcessListVisible: (Bool) -> Void
 
     /// Flat index of the inspected core, or −1. Kept across page switches and window reopening.
     @AppStorage("window.cpu.selectedCore") private var selectedIndex = -1
@@ -59,8 +62,10 @@ struct CPUPage: View {
                 }
             }
 
-            // The two whole-CPU histories side by side, so load and heat read together.
-            EqualHeightRow {
+            let charts = width >= 660
+                ? AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+                : AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            charts {
                 ChartCard(title: "Usage", height: 160) {
                     ViewThatFits(in: .horizontal) {
                         usageLegend(usageSeries[...])
@@ -86,13 +91,16 @@ struct CPUPage: View {
                     )
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
+
+            ProcessRankingCard(snapshot: model.memory.processes, initialRanking: .cpu, setVisible: setProcessListVisible)
 
             if !cpu.topology.cores.isEmpty {
                 Card {
                     VStack(alignment: .leading, spacing: 12) {
-                        CardHeader(title: "Cores", subtitle: selectedCore == nil ? "Select a core to see its usage and temperature history" : nil) {
+                        CardHeader(title: "Cores", subtitle: selectedCore == nil ? "Select a core to inspect its history" : nil) {
                             InfoButton(label: "About core temperatures") {
-                                CoreMappingExplanation(cores: cpu.topology.cores)
+                                CoreMappingExplanation(cores: cpu.topology.clusters.flatMap(\.cores))
                             }
                         }
                         CoreMatrix(cpu: cpu, selected: selectedCore) { core in
@@ -105,7 +113,9 @@ struct CPUPage: View {
                                 clusterTitle: cpu.topology.cluster(core.cluster)?.title,
                                 usage: cpu.cores[core.flatIndex],
                                 temperature: cpu.coreTemperatures[core.flatIndex],
+                                power: cpu.corePowers.indices.contains(core.flatIndex) ? cpu.corePowers[core.flatIndex] : .pending(.watts),
                                 sensorKey: coreSensorKeys[core.flatIndex],
+                                width: width - 24,
                                 context: context,
                                 close: { selectedIndex = -1 }
                             )
@@ -135,6 +145,8 @@ struct CPUPage: View {
             }
         }
         .modifier(RevealCoreInspector(selectedCore: selectedCore))
+        .onChange(of: selectedCore != nil, initial: true) { _, visible in setCoreInspectorVisible(visible) }
+        .onDisappear { setCoreInspectorVisible(false) }
     }
 
     private var selectedCore: CoreID? {
@@ -184,16 +196,15 @@ struct CPUPage: View {
 
 // MARK: - Core matrix
 
-/// Six columns that adapt between 76 and 140 pt with 8 pt gaps. Every cell selects its core.
+/// All tiers share six equal columns, including incomplete rows and narrow split views.
 struct CoreMatrix: View {
     let cpu: CPUSnapshot
     let selected: CoreID?
     let select: (CoreID) -> Void
 
-    @State private var width: CGFloat = 600
+    private static let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 8), count: 6)
 
     var body: some View {
-        let cell = min(140, max(76, ((width - 5 * 8) / 6).rounded(.down)))
         VStack(alignment: .leading, spacing: 12) {
             ForEach(cpu.topology.clusters) { cluster in
                 VStack(alignment: .leading, spacing: 6) {
@@ -207,26 +218,21 @@ struct CoreMatrix: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityAddTraits(.isHeader)
-                    let cores = cluster.cores
-                    ForEach(Array(stride(from: 0, to: cores.count, by: 6)), id: \.self) { start in
-                        HStack(spacing: 8) {
-                            ForEach(cores[start..<min(start + 6, cores.count)]) { core in
-                                WindowCoreCell(
-                                    core: core,
-                                    reading: cpu.cores[core.flatIndex],
-                                    temperature: cpu.coreTemperatures[core.flatIndex],
-                                    width: cell,
-                                    isSelected: selected == core,
-                                    select: { select(core) }
-                                )
-                            }
+                    LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 6) {
+                        ForEach(cluster.cores) { core in
+                            WindowCoreCell(
+                                core: core,
+                                reading: cpu.cores[core.flatIndex],
+                                temperature: cpu.coreTemperatures[core.flatIndex],
+                                isSelected: selected == core,
+                                select: { select(core) }
+                            )
                         }
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
@@ -234,7 +240,6 @@ private struct WindowCoreCell: View {
     let core: CoreID
     let reading: MetricReading
     let temperature: MetricReading?
-    let width: CGFloat
     let isSelected: Bool
     let select: () -> Void
 
@@ -246,7 +251,7 @@ private struct WindowCoreCell: View {
         let fraction = (reading.shownValue ?? 0) / 100
         let color = Palette.cluster(core.cluster)
         Button(action: select) {
-            VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
                     Text(core.label)
                         .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
@@ -265,7 +270,7 @@ private struct WindowCoreCell: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
-            .frame(width: width, height: 56)
+            .frame(maxWidth: .infinity, minHeight: 56, maxHeight: 56, alignment: .topLeading)
             .background {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(hovering && !isSelected ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.fill.quaternary))
@@ -284,10 +289,10 @@ private struct WindowCoreCell: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(isSelected ? "Hide \(core.label) history" : "Show \(core.label) usage and temperature history")
+        .help(isSelected ? "Hide \(core.label) history" : "Show \(core.label) usage, temperature, and power history")
         .accessibilityLabel(core.label)
         .accessibilityValue(spokenValue)
-        .accessibilityHint(isSelected ? "Hides this core's history" : "Shows usage and temperature history for this core")
+        .accessibilityHint(isSelected ? "Hides this core's history" : "Shows usage, temperature, and power history for this core")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -325,8 +330,7 @@ private struct RevealCoreInspector: ViewModifier {
     }
 }
 
-/// Usage and temperature history for one core, on the page's time range. Two charts at
-/// most, drawn from the shared history; the matrix cells themselves stay chart-free.
+/// A single time range across all three metrics for the selected core.
 private struct CoreInspector: View {
     static let scrollID = "coreInspector"
 
@@ -334,8 +338,10 @@ private struct CoreInspector: View {
     let clusterTitle: String?
     let usage: MetricReading
     let temperature: MetricReading?
+    let power: MetricReading
     /// Sensor matched to this core by the community table, if any.
     let sensorKey: String?
+    let width: CGFloat
     let context: ChartContext
     let close: () -> Void
 
@@ -365,73 +371,64 @@ private struct CoreInspector: View {
                 .accessibilityLabel("Close \(core.label) details")
             }
 
-            EqualHeightRow(spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    header("Usage") {
-                        ReadingText.percent(usage)
-                    }
-                    HistoryChart(
-                        series: [ChartSeries(key: .coreUsage(core), name: "\(core.label) Usage", color: Palette.cluster(core.cluster), style: .lineAndArea)],
-                        scale: .percent, range: context.range, end: context.end, revision: context.revision,
-                        accessibilityName: "\(core.label) usage", unavailableReason: usage.unavailableReason
-                    )
-                    .frame(height: 120)
-                    Text("Share of time this core was busy over each update.")
-                        .font(.pmCaption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            if width >= 630 {
+                HStack(alignment: .top, spacing: 16) {
+                    usageChart
+                    temperatureChart
+                    powerChart
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    header("Temperature") {
-                        if sensorKey != nil {
-                            TemperatureText(reading: temperature ?? .pending(.celsius), font: .pmBodyNumber, emphasis: .primary)
-                        }
-                    }
-                    if let sensorKey {
-                        HistoryChart(
-                            series: [ChartSeries(key: .coreTemperature(core), name: "\(core.label) Temperature", color: Palette.temperature)],
-                            scale: .temperature, range: context.range, end: context.end, revision: context.revision,
-                            accessibilityName: "Temperature near \(core.label)", unavailableReason: temperature?.unavailableReason
-                        )
-                        .frame(height: 120)
-                        Text("Sensor \(sensorKey) · reads the area near \(core.label), not the core itself.")
-                            .font(.pmCaption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .help(sensorHelp(sensorKey))
-                    } else {
-                        Text("No sensor is matched to \(core.label).")
-                            .font(.pmCaption)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, minHeight: 120)
-                            .background(.fill.quinary, in: .rect(cornerRadius: 8))
-                        Text("Core temperatures come from a community-maintained table that has no entry for this core.")
-                            .font(.pmCaption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+            } else {
+                HStack(alignment: .top, spacing: 16) {
+                    usageChart
+                    temperatureChart
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                Divider()
+                powerChart
             }
-            Text("Core history is recorded while this window is visible.")
-                .font(.pmCaption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Core \(core.label) details")
     }
 
-    private func header<Value: View>(_ title: String, @ViewBuilder value: () -> Value) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(title)
-                .font(.pmBody.weight(.medium))
-                .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: 8)
-            value()
+    private var usageChart: some View {
+        metric("Usage", key: .coreUsage(core), reading: usage, color: Palette.cluster(core.cluster), scale: .percent) {
+            ReadingText.percent(usage)
         }
+    }
+
+    private var temperatureChart: some View {
+        let reading = temperature ?? (sensorKey == nil
+            ? MetricReading(value: nil, unit: .celsius, status: .unavailable(.unsupported), source: .sensors)
+            : .pending(.celsius))
+        return metric("Temperature", key: .coreTemperature(core), reading: reading, color: Palette.temperature, scale: .temperature) {
+            TemperatureText(reading: reading, font: .pmBodyNumber, emphasis: .primary)
+        }
+        .help(sensorKey.map(sensorHelp) ?? "No temperature sensor is mapped to \(core.label).")
+    }
+
+    private var powerChart: some View {
+        metric("Power", key: .corePower(core), reading: power, color: Palette.power, scale: .corePower) {
+            ReadingText(reading: power, format: { Format.coreWatts($0, compact: false) })
+        }
+        .help("Average power from this core's energy counter over the sampling interval.")
+    }
+
+    private func metric<Value: View>(_ title: String, key: SeriesKey, reading: MetricReading, color: Color,
+                                     scale: ChartScale, @ViewBuilder value: () -> Value) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title)
+                    .font(.pmBody.weight(.medium))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 4)
+                value()
+            }
+            HistoryChart(series: [ChartSeries(key: key, name: "\(core.label) \(title)", color: color, style: .lineAndArea)],
+                         scale: scale, range: context.range, end: context.end, revision: context.revision,
+                         accessibilityName: "\(core.label) \(title.lowercased())", unavailableReason: reading.unavailableReason)
+                .frame(height: 112)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private func sensorHelp(_ key: String) -> String {

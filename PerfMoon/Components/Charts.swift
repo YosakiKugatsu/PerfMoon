@@ -62,8 +62,10 @@ extension CoreCluster {
 enum ChartScale {
     case percent
     case watts(minimumMax: Double)
+    case corePower
     case temperature
     case bytes(maximum: Double)
+    case throughput, operations
 }
 
 private func niceCeiling(_ value: Double) -> Double {
@@ -157,14 +159,24 @@ struct HistoryChart: View {
 
     private func drawAxes(context: GraphicsContext, rect: CGRect, domain: ClosedRange<Double>) {
         var grid = Path()
-        let divisions = range == .fiveMinutes ? 5 : (range == .oneMinute ? 4 : 3)
+        let candidates: [Int] = switch range {
+        case .oneMinute, .oneHour: [4, 2, 1]
+        case .fiveMinutes: [5, 1]
+        case .fifteenMinutes: [3, 1]
+        case .sixHours: [6, 3, 2, 1]
+        }
+        let divisions = candidates.first { rect.width >= CGFloat($0) * 40 } ?? 1
         for index in 0...divisions {
             let fraction = Double(index) / Double(divisions)
             let x = rect.minX + fraction * rect.width
             grid.move(to: CGPoint(x: x, y: rect.minY)); grid.addLine(to: CGPoint(x: x, y: rect.maxY))
             if !compact {
-                let seconds = Int((1 - fraction) * range.seconds)
-                let label = seconds == 0 ? "Now" : range == .oneMinute ? "\(Format.minus)\(seconds)s" : "\(Format.minus)\(seconds / 60)m"
+                let seconds = (divisions - index) * range.rawValue / divisions
+                let label: String
+                if seconds == 0 { label = "Now" }
+                else if seconds.isMultiple(of: 3600) { label = "\(Format.minus)\(seconds / 3600)h" }
+                else if seconds.isMultiple(of: 60) { label = "\(Format.minus)\(seconds / 60)m" }
+                else { label = "\(Format.minus)\(seconds)s" }
                 context.draw(Text(label).font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary),
                              at: CGPoint(x: x, y: rect.maxY + 7),
                              anchor: index == 0 ? .topLeading : index == divisions ? .topTrailing : .top)
@@ -185,9 +197,11 @@ struct HistoryChart: View {
     private func yDomain(_ points: [ChartPoint]) -> ClosedRange<Double> {
         switch scale {
         case .percent: return 0...100
+        case .corePower: return 0...niceCeiling(max(0.01, (points.lazy.map(\.value).max() ?? 0) * 1.08))
         case .watts(let minimumMax):
             return 0...niceCeiling(max(minimumMax, (points.map(\.value).max() ?? 0) * 1.12))
         case .bytes(let maximum): return 0...maximum
+        case .throughput, .operations: return 0...niceCeiling(max(1, (points.map(\.value).max() ?? 0) * 1.08))
         case .temperature:
             let values = points.map(\.value)
             guard let low = values.min(), let high = values.max() else { return 20...60 }
@@ -199,9 +213,12 @@ struct HistoryChart: View {
 
     private func yLabel(_ value: Double) -> String {
         switch scale {
-        case .percent: return "\(Int(value))%"
+        case .percent: return Format.percent(value)
+        case .corePower: return Format.coreWatts(value, compact: false)
         case .watts: return value.rounded() == value ? "\(Int(value)) W" : String(format: "%.1f W", value)
         case .bytes: return Format.wholeGigabytes(value)
+        case .throughput: return Format.transferRate(value)
+        case .operations: return Format.rate(value)
         case .temperature: return Format.temperature(value, unit: unit)
         }
     }

@@ -82,10 +82,80 @@ struct PanelProcessColumns: View {
     }
 }
 
+/// Expanded rankings share a single scan across the panel and all detail pages.
+struct ProcessRankingCard: View {
+    let snapshot: ProcessMemorySnapshot
+    var showsPID = true
+    let setVisible: (Bool) -> Void
+    @State private var expanded = false
+    @State private var ranking: ProcessRanking
+
+    init(snapshot: ProcessMemorySnapshot, initialRanking: ProcessRanking, showsPID: Bool = true,
+         setVisible: @escaping (Bool) -> Void) {
+        self.snapshot = snapshot
+        self.showsPID = showsPID
+        self.setVisible = setVisible
+        _ranking = State(initialValue: initialRanking)
+    }
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                CardHeader(title: "Top 10 Processes", subtitle: expanded ? nil : ranking.title) {
+                    Button(expanded ? "Hide" : "Show") { expanded.toggle() }
+                        .controlSize(.small)
+                        .accessibilityLabel(expanded ? "Hide Top 10 Processes" : "Show Top 10 Processes")
+                }
+                if expanded {
+                    Picker("Rank processes by", selection: $ranking) {
+                        ForEach(ProcessRanking.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden().pickerStyle(.segmented).controlSize(.small)
+                    ProcessMemoryList(snapshot: snapshot, ranking: ranking, showsPID: showsPID)
+                    HStack {
+                        if ranking == .cpu { Text("100% = one core") }
+                        if ranking == .diskRead || ranking == .diskWrite { Text("Across all disks") }
+                        Spacer()
+                        if snapshot.inaccessibleProcessCount > 0 {
+                            Text("\(snapshot.inaccessibleProcessCount) restricted by macOS")
+                        }
+                    }
+                    .font(.pmCaption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .onChange(of: expanded) { _, value in setVisible(value) }
+            .onAppear { if expanded { setVisible(true) } }
+            .onDisappear { setVisible(false) }
+        }
+    }
+}
+
+private extension ProcessRanking {
+    func format(_ value: Double) -> String {
+        switch self {
+        case .memory: Format.bytes(value)
+        case .cpu: "\(Int(value.rounded()))%"
+        case .diskRead, .diskWrite: Format.transferRate(value)
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .cpu: Palette.cpu
+        case .memory: Palette.memory
+        case .diskRead: Palette.incoming
+        case .diskWrite: Palette.outgoing
+        }
+    }
+}
+
 /// Top memory-consuming processes as supplied by the data layer (already sorted and limited).
 /// The view never enumerates processes itself.
 struct ProcessMemoryList: View {
     let snapshot: ProcessMemorySnapshot
+    var ranking: ProcessRanking = .memory
+    private var entries: [ProcessMemoryEntry] { snapshot.entries(for: ranking) }
     /// Panel style: tighter rows, no PID column (PID stays in the tooltip and VoiceOver).
     var compact = false
     var showsPID = true
@@ -93,23 +163,24 @@ struct ProcessMemoryList: View {
     @Environment(\.monitorPaused) private var paused
 
     var body: some View {
-        if snapshot.entries.isEmpty {
+        if entries.isEmpty {
             statusLine
         } else {
             VStack(spacing: compact ? 2 : 0) {
                 if !compact {
                     header
                 }
-                let largest = snapshot.entries.map(\.memoryBytes).max() ?? 1
-                ForEach(Array(snapshot.entries.enumerated()), id: \.element.id) { index, entry in
+                let largest = entries.first?.value(for: ranking) ?? 1
+                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                     ProcessMemoryRow(
                         rank: index + 1,
                         entry: entry,
-                        fraction: largest > 0 ? entry.memoryBytes / largest : 0,
+                        ranking: ranking,
+                        fraction: largest > 0 ? entry.value(for: ranking) / largest : 0,
                         compact: compact,
                         showsPID: showsPID && !compact
                     )
-                    if !compact, index < snapshot.entries.count - 1 {
+                    if !compact, index < entries.count - 1 {
                         Divider()
                     }
                 }
@@ -117,7 +188,7 @@ struct ProcessMemoryList: View {
             .opacity(snapshot.status == .stale ? 0.45 : 1)
             .helpIfPresent(staleHelp)
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Top processes by memory")
+            .accessibilityLabel("Top processes by \(ranking.title)")
         }
     }
 
@@ -128,7 +199,7 @@ struct ProcessMemoryList: View {
             if showsPID {
                 Text("PID").frame(width: 56, alignment: .trailing)
             }
-            Text("Memory").frame(width: 72, alignment: .trailing)
+            Text(ranking.title).frame(width: 84, alignment: .trailing)
         }
         .font(.pmCaption.weight(.semibold))
         .foregroundStyle(.secondary)
@@ -142,7 +213,11 @@ struct ProcessMemoryList: View {
         let message: String = switch snapshot.status {
         case .unavailable(let reason): reason.message
         case .warming: ReadingStatus.warmingMessage
-        case .valid, .stale: "No processes to show"
+        case .valid, .stale:
+            if ranking != .memory && snapshot.rateWindow == nil { "Measuring the first interval…" }
+            else if ranking == .diskRead { "No disk reads in this interval" }
+            else if ranking == .diskWrite { "No disk writes in this interval" }
+            else { "No processes to show" }
         }
         Text(message)
             .font(.pmCaption)
@@ -161,6 +236,7 @@ struct ProcessMemoryList: View {
 private struct ProcessMemoryRow: View {
     let rank: Int
     let entry: ProcessMemoryEntry
+    let ranking: ProcessRanking
     let fraction: Double
     let compact: Bool
     let showsPID: Bool
@@ -184,10 +260,10 @@ private struct ProcessMemoryRow: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 56, alignment: .trailing)
             }
-            Text(Format.bytes(entry.memoryBytes))
+            Text(ranking.format(entry.value(for: ranking)))
                 .font(.pmBodyNumber)
                 .fixedSize()
-                .frame(minWidth: compact ? 58 : 72, alignment: .trailing)
+                .frame(minWidth: compact ? 58 : 84, alignment: .trailing)
         }
         .foregroundStyle(paused ? .secondary : .primary)
         .padding(.horizontal, 6)
@@ -195,13 +271,13 @@ private struct ProcessMemoryRow: View {
         .background(alignment: .leading) {
             GeometryReader { proxy in
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(Palette.memory.opacity(0.10))
+                    .fill(ranking.color.opacity(0.10))
                     .frame(width: max(6, proxy.size.width * min(1, fraction)))
             }
         }
         .help("\(entry.name) · PID \(entry.pid)")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(entry.name)
-        .accessibilityValue("\(Format.spokenBytes(entry.memoryBytes)), process ID \(entry.pid)")
+        .accessibilityValue("\(ranking.format(entry.value(for: ranking))), process ID \(entry.pid)")
     }
 }

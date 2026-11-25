@@ -18,6 +18,7 @@ public struct CPUSnapshot: Sendable, Equatable {
     /// Readings in topology display order.
     public var cores: [MetricReading]
     /// Mapped core temperatures; nil when the core has no mapped sensor or it is not being read.
+    public var corePowers: [MetricReading] = []
     public var coreTemperatures: [MetricReading?]
     public var throttle: ThrottleStatus = .unavailable
 
@@ -142,6 +143,9 @@ public struct MonitorSnapshot: Sendable, Equatable {
     public var gpu: GPUSnapshot
     public var memory: MemorySnapshot
     public var disk: DiskSnapshot
+    public var diskActivity: [DiskActivity] = []
+    public var diskActivityStatus: ReadingStatus = .warming
+    public var network = NetworkActivity()
     public var diskDrives: [DiskDriveSnapshot]
     public var diskVolumes: [DiskSnapshot] { diskDrives.flatMap(\.volumes) }
     public var power: PowerSnapshot

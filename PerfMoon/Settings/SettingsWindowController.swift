@@ -211,7 +211,7 @@ private struct SettingsPage: View {
             case .performance:
                 PerformanceSettingsPage(settings: app.settings, support: support)
             case .dataSources:
-                DataSourcesSettingsPage(support: support) { app.engine.retry($0) }
+                DataSourcesSettingsPage(support: support, settings: app.settings, authorize: app.authorizeCollector, retry: app.retrySource)
             }
         }
         .frame(width: SettingsTab.contentSize.width, height: SettingsTab.contentSize.height)

@@ -65,6 +65,12 @@ enum MainMenu {
         }
         range.submenu = rangeMenu
         view.addItem(range)
+        let statistics = ClosureMenuItem(title: "Show Statistics", key: "i", modifiers: [.command, .option]) { [unowned app] in
+            app.settings.showsStatistics.toggle()
+            app.openMainWindow(page: nil)
+        }
+        statistics.identifier = NSUserInterfaceItemIdentifier("statistics")
+        view.addItem(statistics)
         view.addItem(.separator())
         let pause = ClosureMenuItem(title: "Pause Monitoring", key: "p", modifiers: [.command, .shift]) { [unowned app] in
             app.togglePause()
@@ -122,6 +128,9 @@ private final class ViewMenuDelegate: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         for item in menu.items {
+            if item.identifier?.rawValue == "statistics" {
+                item.title = app.settings.showsStatistics ? "Show Charts" : "Show Statistics"
+            }
             if item.identifier?.rawValue == "pause" {
                 item.title = app.isPaused ? "Resume Monitoring" : "Pause Monitoring"
             }

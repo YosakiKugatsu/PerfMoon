@@ -103,9 +103,6 @@ struct MemoryPage: View {
     /// Reports whether the process list is on screen. False when collapsed or when the page goes away.
     let setProcessListVisible: (Bool) -> Void
 
-    /// Not persisted: each visit starts collapsed, so a scan starts only after a click.
-    @State private var showsProcesses = false
-
     var body: some View {
         let memory = model.memory
         PageScroll {
@@ -187,26 +184,8 @@ struct MemoryPage: View {
                 }
             }
 
-            // Collapsed, this is a single header row rather than a tall empty card.
-            Card {
-                VStack(alignment: .leading, spacing: 10) {
-                    CardHeader(title: "Top 10 Processes", subtitle: "by memory") {
-                        Text("Scanned only while shown.")
-                            .font(.pmCaption)
-                            .foregroundStyle(.tertiary)
-                        Button(showsProcesses ? "Hide" : "Show") { showsProcesses.toggle() }
-                            .controlSize(.small)
-                            .help(showsProcesses ? "Hide the process list and stop scanning" : "Show the 10 processes using the most memory")
-                            .accessibilityLabel(showsProcesses ? "Hide Top 10 Processes" : "Show Top 10 Processes")
-                            .accessibilityValue(showsProcesses ? "Expanded" : "Collapsed")
-                    }
-                    if showsProcesses {
-                        ProcessMemoryList(snapshot: memory.processes, showsPID: width >= 700)
-                            .onAppear { setProcessListVisible(true) }
-                            .onDisappear { setProcessListVisible(false) }
-                    }
-                }
-            }
+            ProcessRankingCard(snapshot: memory.processes, initialRanking: .memory, showsPID: width >= 700,
+                               setVisible: setProcessListVisible)
         }
     }
 }
@@ -267,10 +246,12 @@ private struct MemoryExplanation: View {
 /// One card per physical drive, startup drive first: what kind of storage it is, its media
 /// and BSD names, its capacity, then each volume with its device, file system, and own used
 /// space. Shared APFS space is never split into per-volume percentages or added together.
-/// No chart or history: capacity changes slowly and isn't activity.
 struct DiskPage: View {
     let model: DashboardModel
-
+    let context: ChartContext
+    let width: CGFloat
+    let setProcessListVisible: (Bool) -> Void
+    let readDiskHealth: (String) async -> DiskHealthReport?
 
     var body: some View {
         let drives = model.diskDrives
@@ -286,9 +267,14 @@ struct DiskPage: View {
                     }
                 }
             } else {
-                ForEach(drives) { DiskDriveCard(drive: $0) }
+                ForEach(drives) { drive in
+                    DiskDriveCard(drive: drive, activity: model.diskActivity.first { $0.device == drive.id },
+                                  status: model.diskActivityStatus, context: context)
+                }
             }
 
+            ProcessRankingCard(snapshot: model.memory.processes, initialRanking: .diskRead, showsPID: width >= 700,
+                               setVisible: setProcessListVisible)
             Card {
                 VStack(alignment: .leading, spacing: 8) {
                     CardHeader(title: "About Disk Capacity")
@@ -296,13 +282,13 @@ struct DiskPage: View {
                         Text("For the startup disk, Used and Available are what macOS reports for the startup volume, as in System Settings: space macOS can reclaim counts as available. Allocated is all space APFS has allocated there, and Reclaimable is the part macOS reports it can free.")
                         Text("Each volume's Used is the space allocated to it, so it can include reclaimable space and volumes can add up to more than the drive's Used. Volumes in one APFS container share its free space, so they show no separate total or percentage and aren't added together.")
                         Text("When macOS gives no estimate for a drive, it shows the space allocated on that drive's file systems.")
-                        Text("This is capacity, not read or write activity.")
                     }
                     .font(.pmBody)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            DiskHealthCard(drives: drives, read: readDiskHealth)
         }
     }
 }
@@ -310,6 +296,9 @@ struct DiskPage: View {
 /// A physical drive: identity and available space, its capacity, then its volumes.
 private struct DiskDriveCard: View {
     let drive: DiskDriveSnapshot
+    let activity: DiskActivity?
+    let status: ReadingStatus
+    let context: ChartContext
 
     var body: some View {
         Card(padding: 14) {
@@ -362,6 +351,9 @@ private struct DiskDriveCard: View {
                     }
                 }
                 ReasonCaption(reading: drive.used)
+                Divider()
+                DiskActivityView(activity: activity, status: status, context: context)
+                Divider()
                 DiskVolumeTable(volumes: drive.volumes)
             }
         }

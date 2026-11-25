@@ -90,6 +90,8 @@ enum StatusGlyph {
         case .systemPower: "Power"
         case .cpuTemperature: "Temp"
         case .memoryUsed: "RAM"
+        case .networkDownload: "↓/s"
+        case .networkUpload: "↑/s"
         }
     }
 
@@ -100,6 +102,8 @@ enum StatusGlyph {
         case .systemPower: snapshot.power.system
         case .cpuTemperature: snapshot.cpu.temperature
         case .memoryUsed: snapshot.memory.used
+        case .networkDownload: snapshot.network.rates.incoming
+        case .networkUpload: snapshot.network.rates.outgoing
         }
     }
 
@@ -110,6 +114,7 @@ enum StatusGlyph {
         case .systemPower: return Format.wattsCompact(value)
         case .cpuTemperature: return Format.temperatureCompact(value, unit: unit)
         case .memoryUsed: return Format.bytesCompact(value)
+        case .networkDownload, .networkUpload: return Format.transferRateCompact(value)
         }
     }
 
@@ -123,6 +128,7 @@ enum StatusGlyph {
         case .systemPower: "\(metric.title) \(Format.spokenWatts(value))"
         case .cpuTemperature: "\(metric.title) \(Format.spokenTemperature(value, unit: unit))"
         case .memoryUsed: "\(metric.title) \(Format.spokenBytes(value))"
+        case .networkDownload, .networkUpload: "\(metric.title) \(Format.transferRate(value))"
         }
         return description + (reading.isStale ? ", stale" : "")
     }

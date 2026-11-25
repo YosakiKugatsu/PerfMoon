@@ -12,8 +12,11 @@ public enum Format {
     // MARK: Percent
 
     public static func percent(_ value: Double) -> String {
-        if value > 0, value < 0.5 { return "<1%" }
-        return "\(Int(min(100, max(0, value)).rounded()))%"
+        "\(roundedPercent(value))%"
+    }
+
+    private static func roundedPercent(_ value: Double) -> Int {
+        Int(min(100, max(0, value)).rounded())
     }
 
     /// One decimal, used for PerfMoon's own CPU share.
@@ -27,6 +30,12 @@ public enum Format {
         let value = max(0, value)
         if value < 99.95 { return String(format: "%.1f W", locale: posix, value) }
         return "\(Int(value.rounded())) W"
+    }
+
+    public static func coreWatts(_ value: Double, compact: Bool) -> String {
+        let threshold = compact ? 0.0995 : 0.9995
+        if value >= threshold { return compact ? wattsCompact(value) : watts(value) }
+        return "\(Int((max(0, value) * 1_000).rounded()))" + (compact ? "mW" : " mW")
     }
 
     public static func wattsCompact(_ value: Double) -> String {
@@ -92,6 +101,39 @@ public enum Format {
 
     // MARK: Rates
 
+    /// Decimal link and storage transfer units. The menu uses at most four
+    /// characters, with direction and "per second" supplied by its label.
+    public static func transferRate(_ value: Double) -> String {
+        let (number, index) = scaledRate(value)
+        return number + " " + ["B/s", "kB/s", "MB/s", "GB/s", "TB/s"][index]
+    }
+
+    public static func transferRateCompact(_ value: Double) -> String {
+        let (number, index) = scaledRate(value)
+        return number + ["B", "K", "M", "G", "T"][index]
+    }
+
+    /// Decimal bytes for transfer totals, including reads smaller than one MB.
+    public static func transferBytes(_ value: Double) -> String {
+        let units = ["B", "kB", "MB", "GB", "TB", "PB", "EB"]
+        let (number, index) = scaledRate(value, lastUnit: units.count - 1)
+        return number + " " + units[index]
+    }
+
+    private static func scaledRate(_ value: Double, lastUnit: Int = 4) -> (String, Int) {
+        var amount = max(0, value)
+        var index = 0
+        while amount >= 999.5 && index < lastUnit {
+            amount /= 1000
+            index += 1
+        }
+        if index > 0, amount < 9.95 {
+            return (String(format: "%.1f", locale: posix, amount), index)
+        }
+        if lastUnit > 4, amount >= 1000 { return (String(format: "%.0f", locale: posix, amount), index) }
+        return (String(Int(min(999, amount.rounded()))), index)
+    }
+
     public static func rate(_ value: Double) -> String {
         let value = max(0, value)
         if value < 999.5 { return "\(Int(value.rounded()))/s" }
@@ -112,8 +154,7 @@ public enum Format {
     // MARK: Spoken forms for VoiceOver
 
     public static func spokenPercent(_ value: Double) -> String {
-        if value > 0, value < 0.5 { return "less than 1 percent" }
-        return "\(Int(min(100, max(0, value)).rounded())) percent"
+        "\(roundedPercent(value)) percent"
     }
 
     public static func spokenWatts(_ value: Double) -> String {

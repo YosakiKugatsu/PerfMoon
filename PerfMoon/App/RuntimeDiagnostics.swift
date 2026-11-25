@@ -11,7 +11,6 @@ final class RuntimeDiagnostics {
     private var output: FileHandle?
     private var lastTime = -Double.infinity
     private var lastMode = ""
-    private var usage = SelfUsageSampler()
     private var written = 0
     var isEnabled: Bool { output != nil }
 
@@ -25,23 +24,30 @@ final class RuntimeDiagnostics {
         _ = try? output?.seekToEnd()
     }
 
-    func record(_ engine: MonitorEngine, settingsTab: String?, details: [String: Any] = [:]) {
+    func record(_ engine: MonitorEngine, collector: RootMetricProvider, settingsTab: String?, details: [String: Any] = [:]) {
         guard let output, written < 8 * 1024 * 1024 else { return }
         let demands = engine.core.demands.map { demand in
             switch demand {
             case .popover: "panel"
+            case .panelNetwork: "panelNetwork"
+            case .panelDiskActivity: "panelDiskActivity"
+            case .menuNetwork: "menuNetwork"
+            case .panelCorePower: "corePower"
+            case .panelCoreTemperatures: "coreTemperatures"
             case .window(let page): "window:\(page.rawValue)"
             case .sensorTable: "sensors"
             case .performancePage: "selfUsage"
             case .memoryProcesses: "processes"
             case .windowMemoryProcesses: "windowProcesses"
             case .coreHistory: "coreHistory"
+            case .continuousHistory: "continuousHistory"
+            case .coreInspector: "coreInspector"
             }
         }.sorted()
         let mode = demands.joined(separator: ",") + "/" + (settingsTab ?? "") + "/\(engine.core.userPaused)/\(engine.core.systemSuspended)"
         let now = MonitorEngine.now
         guard mode != lastMode || now - lastTime >= 10 else { return }
-        let cost = usage.sample(at: now, window: now - lastTime)
+        let cost = collector.diagnosticUsage(at: now, window: lastTime.isFinite ? now - lastTime : 0)
         lastTime = now; lastMode = mode
         let coreHistoryKeys = engine.history.recordedKeys.filter(\.isPerCore)
         var object: [String: Any] = [

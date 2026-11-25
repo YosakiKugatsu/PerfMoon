@@ -25,25 +25,39 @@ public struct TimeSeries: Sendable {
 
     public let capacity: Int
     public let retention: TimeInterval
+    private let initialCapacity: Int
     private var storage: ContiguousArray<HistorySample> = []
     private var start = 0
+    private var lastInterval: TimeInterval = 0
     public private(set) var count = 0
     /// Set by explicit events (pause, sleep, source change, failure); the next sample starts a segment.
     public private(set) var pendingBreak = true
 
     public init(retention: TimeInterval = TimeSeries.defaultRetention, capacity: Int = 1024) {
+        self.init(retention: retention, capacity: capacity, initialCapacity: capacity)
+    }
+
+    init(retention: TimeInterval, capacity: Int, initialCapacity: Int) {
         self.retention = retention
-        self.capacity = capacity
+        self.capacity = max(1, capacity)
+        self.initialCapacity = max(1, min(capacity, initialCapacity))
     }
 
     public var isEmpty: Bool { count == 0 }
+    var bufferBytes: Int { storage.capacity * MemoryLayout<HistorySample>.stride }
 
     public var last: HistorySample? {
         count == 0 ? nil : self[count - 1]
     }
 
     public subscript(position: Int) -> HistorySample {
-        storage[(start + position) % capacity]
+        var sample = stored(position)
+        if position == 0 { sample.startsSegment = true }
+        return sample
+    }
+
+    private func stored(_ position: Int) -> HistorySample {
+        storage[slot(position)]
     }
 
     public mutating func markBreak() {
@@ -52,6 +66,7 @@ public struct TimeSeries: Sendable {
 
     public mutating func removeAll() {
         storage = []
+        lastInterval = 0
         start = 0
         count = 0
         pendingBreak = true
@@ -60,26 +75,42 @@ public struct TimeSeries: Sendable {
     /// Appends a sample taken `expectedInterval` after the previous one was due.
     /// Samples that do not move forward in time are ignored.
     public mutating func append(time: TimeInterval, value: Double, expectedInterval: TimeInterval) {
+        _ = append(time: time, value: value, expectedInterval: expectedInterval, evict: { _ in })
+    }
+
+    /// Evicted samples retain their *original* segment markers at the handoff
+    /// from the full-resolution ring to the older, compact history.
+    @discardableResult
+    mutating func append(time: TimeInterval, value: Double, expectedInterval: TimeInterval,
+                         evict: (HistorySample) -> Void) -> HistorySample? {
         guard value.isFinite else {
             pendingBreak = true
-            return
+            return nil
         }
         var startsSegment = pendingBreak
         if let last {
-            guard time > last.time else { return }
-            if time - last.time > TimeSeries.gapFactor * expectedInterval {
+            guard time > last.time else { return nil }
+            if time - last.time > TimeSeries.gapFactor * max(expectedInterval, lastInterval) {
                 startsSegment = true
             }
         } else {
             startsSegment = true
         }
         pendingBreak = false
-        push(HistorySample(time: time, value: Float(value), startsSegment: startsSegment))
-        trim(before: time - retention)
+        lastInterval = expectedInterval
+        let sample = HistorySample(time: time, value: Float(value), startsSegment: startsSegment)
+        if count == capacity { evict(storage[start]) }
+        appendRecorded(sample)
+        discard(before: time - retention, evict: evict)
+        return sample
     }
 
     /// Samples at or after `time`, oldest first.
     public func samples(since time: TimeInterval) -> [HistorySample] {
+        samples(since: time, preservingHead: false)
+    }
+
+    func samples(since time: TimeInterval, preservingHead: Bool) -> [HistorySample] {
         guard count > 0 else { return [] }
         var low = 0
         var high = count
@@ -89,7 +120,8 @@ public struct TimeSeries: Sendable {
         }
         var result: [HistorySample] = []
         result.reserveCapacity(count - low)
-        for index in low..<count { result.append(self[index]) }
+        for index in low..<count { result.append(stored(index)) }
+        if !preservingHead, low == 0, !result.isEmpty { result[0].startsSegment = true }
         return result
     }
 
@@ -97,30 +129,35 @@ public struct TimeSeries: Sendable {
         (0..<count).map { self[$0] }
     }
 
-    private mutating func push(_ sample: HistorySample) {
-        if storage.isEmpty {
-            storage = ContiguousArray(repeating: sample, count: capacity)
+    /// The archive calls this with already-segmented envelope points. Grow on
+    /// demand and reuse retired slots instead of retaining discarded prefixes.
+    mutating func appendRecorded(_ sample: HistorySample) {
+        if count == storage.count && count < capacity {
+            let size = count == 0 ? initialCapacity : min(capacity, count * 2)
+            var grown = ContiguousArray(repeating: sample, count: size)
+            for i in 0..<count { grown[i] = stored(i) }
+            storage = grown
             start = 0
-            count = 1
-            return
         }
         if count < capacity {
-            storage[(start + count) % capacity] = sample
+            storage[slot(count)] = sample
             count += 1
         } else {
             storage[start] = sample
-            start = (start + 1) % capacity
+            start = slot(1)
         }
     }
 
-    private mutating func trim(before cutoff: TimeInterval) {
-        while count > 0, storage[start].time < cutoff {
-            start = (start + 1) % capacity
+    mutating func discard(before cutoff: TimeInterval, evict: (HistorySample) -> Void) {
+        while count > 0 && storage[start].time < cutoff {
+            evict(storage[start])
+            start = slot(1)
             count -= 1
         }
-        // The oldest remaining sample has no visible predecessor.
-        if count > 0, !storage[start].startsSegment {
-            storage[start].startsSegment = true
-        }
+    }
+
+    private func slot(_ position: Int) -> Int {
+        let index = start + position
+        return index < storage.count ? index : index - storage.count
     }
 }

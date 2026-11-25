@@ -5,7 +5,7 @@ import Darwin
 import Foundation
 
 /// PerfMoon's own CPU time and physical footprint. This reads only the current process.
-public struct SelfUsage: Sendable, Equatable {
+public struct SelfUsage: Sendable, Equatable, Codable {
     /// Share of one core over the last sampling window.
     public var cpu: MetricReading
     public var footprint: MetricReading

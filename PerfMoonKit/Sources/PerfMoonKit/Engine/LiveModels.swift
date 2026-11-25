@@ -16,6 +16,9 @@ public final class DashboardModel {
     public private(set) var gpu: GPUSnapshot
     public private(set) var memory: MemorySnapshot
     public private(set) var disk: DiskSnapshot
+    public private(set) var diskActivity: [DiskActivity]
+    public private(set) var diskActivityStatus: ReadingStatus
+    public private(set) var network: NetworkActivity
     public private(set) var diskDrives: [DiskDriveSnapshot]
     public var diskVolumes: [DiskSnapshot] { diskDrives.flatMap(\.volumes) }
     public private(set) var power: PowerSnapshot
@@ -29,6 +32,9 @@ public final class DashboardModel {
         gpu = snapshot.gpu
         memory = snapshot.memory
         disk = snapshot.disk
+        diskActivity = snapshot.diskActivity
+        diskActivityStatus = snapshot.diskActivityStatus
+        network = snapshot.network
         diskDrives = snapshot.diskDrives
         power = snapshot.power
         prompt = snapshot.prompt
@@ -42,6 +48,9 @@ public final class DashboardModel {
         if gpu != snapshot.gpu { gpu = snapshot.gpu }
         if memory != snapshot.memory { memory = snapshot.memory }
         if disk != snapshot.disk { disk = snapshot.disk }
+        if diskActivity != snapshot.diskActivity { diskActivity = snapshot.diskActivity }
+        if diskActivityStatus != snapshot.diskActivityStatus { diskActivityStatus = snapshot.diskActivityStatus }
+        if network != snapshot.network { network = snapshot.network }
         if diskDrives != snapshot.diskDrives { diskDrives = snapshot.diskDrives }
         if power != snapshot.power { power = snapshot.power }
         if prompt != snapshot.prompt { prompt = snapshot.prompt }

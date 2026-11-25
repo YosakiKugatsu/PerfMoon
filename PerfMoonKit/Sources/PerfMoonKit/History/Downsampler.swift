@@ -40,59 +40,53 @@ public enum Downsampler {
     /// Splits the window into buckets and keeps each bucket's minimum and maximum in time order.
     /// Buckets never span a segment break, so gaps stay gaps.
     public static func points(from samples: [HistorySample], start: TimeInterval, end: TimeInterval, buckets: Int = defaultBuckets) -> [ChartPoint] {
-        let visible = samples.filter { $0.time >= start && $0.time <= end }
-        guard !visible.isEmpty else { return [] }
-
+        var visible = samples[...]
+        while let sample = visible.first, sample.time < start { visible.removeFirst() }
+        while let sample = visible.last, sample.time > end { visible.removeLast() }
+        guard let first = visible.first, buckets > 0 else { return [] }
         var segment = 0
-        var segmentIndices: [Int] = []
-        segmentIndices.reserveCapacity(visible.count)
-        for (index, sample) in visible.enumerated() {
-            if index > 0, sample.startsSegment { segment += 1 }
-            segmentIndices.append(segment)
-        }
-
         if visible.count <= buckets * 2 || end <= start {
             return visible.enumerated().map { index, sample in
-                ChartPoint(time: sample.time, value: Double(sample.value), segment: segmentIndices[index])
+                if index > 0 && sample.startsSegment { segment += 1 }
+                return ChartPoint(time: sample.time, value: Double(sample.value), segment: segment)
             }
         }
 
         let width = (end - start) / Double(buckets)
         var result: [ChartPoint] = []
-        result.reserveCapacity(buckets * 2 + segment * 2 + 2)
-
-        var groupBucket = -1
-        var groupSegment = -1
-        var minIndex = 0
-        var maxIndex = 0
-
-        func flush() {
-            guard groupBucket >= 0 else { return }
-            let first = min(minIndex, maxIndex)
-            let second = max(minIndex, maxIndex)
-            let a = visible[first]
-            result.append(ChartPoint(time: a.time, value: Double(a.value), segment: groupSegment))
-            if second != first {
-                let b = visible[second]
-                result.append(ChartPoint(time: b.time, value: Double(b.value), segment: groupSegment))
+        result.reserveCapacity(buckets * 2 + 2)
+        func add(_ sample: HistorySample) {
+            if result.last?.time != sample.time {
+                result.append(ChartPoint(time: sample.time, value: Double(sample.value), segment: segment))
             }
         }
-
-        for (index, sample) in visible.enumerated() {
-            let bucket = min(buckets - 1, max(0, Int((sample.time - start) / width)))
-            let sampleSegment = segmentIndices[index]
-            if bucket != groupBucket || sampleSegment != groupSegment {
+        var low = first, high = first, last = first
+        var bucket = min(buckets - 1, Int((first.time - start) / width))
+        func flush() {
+            if low.time <= high.time { add(low); add(high) }
+            else { add(high); add(low) }
+        }
+        add(first)
+        for sample in visible.dropFirst() {
+            let next = min(buckets - 1, Int((sample.time - start) / width))
+            if sample.startsSegment || next != bucket {
                 flush()
-                groupBucket = bucket
-                groupSegment = sampleSegment
-                minIndex = index
-                maxIndex = index
+                if sample.startsSegment {
+                    add(last)
+                    segment += 1
+                    add(sample)
+                }
+                low = sample
+                high = sample
+                bucket = next
             } else {
-                if sample.value < visible[minIndex].value { minIndex = index }
-                if sample.value > visible[maxIndex].value { maxIndex = index }
+                if sample.value < low.value { low = sample }
+                if sample.value > high.value { high = sample }
             }
+            last = sample
         }
         flush()
+        add(last)
         return result
     }
 

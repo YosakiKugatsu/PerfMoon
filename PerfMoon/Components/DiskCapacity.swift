@@ -75,6 +75,14 @@ extension DiskDriveSnapshot {
         }
     }
 
+    var shortTitle: String {
+        switch isInternal {
+        case true?: "Internal"
+        case false?: "External"
+        case nil: name
+        }
+    }
+
     var symbol: String {
         isInternal == false ? "externaldrive" : "internaldrive"
     }
@@ -82,15 +90,6 @@ extension DiskDriveSnapshot {
     /// The startup volume if it's on this drive, otherwise the first volume.
     var leadingVolume: DiskSnapshot? {
         volumes.first(where: \.isStartup) ?? volumes.first
-    }
-
-    /// "Macintosh HD · APFS", "Macintosh HD and 2 more", or "No mounted volumes".
-    var volumeSummary: String {
-        guard let first = leadingVolume else { return "No mounted volumes" }
-        if volumes.count == 1 {
-            return first.fileSystem.isEmpty ? first.name : "\(first.name) · \(first.fileSystem)"
-        }
-        return "\(first.name) and \(volumes.count - 1) more"
     }
 
     /// Menu and tooltip text: "Internal Storage · disk0 · APPLE SSD AP1024Z".

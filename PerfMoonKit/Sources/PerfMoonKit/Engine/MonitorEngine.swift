@@ -30,7 +30,7 @@ public final class MonitorEngine {
         let core = MonitorCore(provider: router)
         self.core = core
         self.snapshot = core.snapshot(now: MonitorEngine.now)
-        core.onDiskSample = { [weak self] in self?.changed() }
+        core.onBackgroundSample = { [weak self] in self?.changed() }
     }
 
     public var history: HistoryStore { core.history }
@@ -55,7 +55,7 @@ public final class MonitorEngine {
         core.history.removeAll()
         core.resetState()
         fixtures.prefill(core.history, now: now, temperatureSource: core.temperatureSource)
-        if !core.demands.contains(.coreHistory) { core.discardCoreHistory() }
+        if !core.recordsCoreHistory { core.discardCoreHistory() }
         primeSources(now: now)
 
         for source in scenario.startsStopped {
@@ -137,6 +137,11 @@ public final class MonitorEngine {
 
     public func setUserInterval(_ interval: UpdateInterval) {
         core.setUserInterval(interval.rawValue, now: Self.now)
+        changed()
+    }
+
+    public func setNetworkInterface(_ name: String?) {
+        core.setNetworkInterface(name, now: Self.now)
         changed()
     }
 

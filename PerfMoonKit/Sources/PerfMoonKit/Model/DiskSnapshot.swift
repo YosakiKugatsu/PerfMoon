@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 /// Capacity and consumed bytes for a mounted filesystem.
-public struct DiskSnapshot: Sendable, Equatable, Identifiable {
+public struct DiskSnapshot: Sendable, Equatable, Identifiable, Codable {
     public let id: String
     public let name: String
     public let mountPath: String
@@ -59,7 +59,7 @@ public struct DiskSnapshot: Sendable, Equatable, Identifiable {
 
 
 /// The startup container's system estimate and its raw APFS accounting, in the same scope.
-struct DiskSystemCapacity: Sendable, Equatable {
+struct DiskSystemCapacity: Sendable, Equatable, Codable {
     let name: String
     let total: Double
     let free: Double
@@ -77,18 +77,20 @@ struct DiskSystemCapacity: Sendable, Equatable {
 
 /// One device group. The startup disk's headline uses macOS Storage's startup container scope;
 /// other devices use their independently accounted filesystems, each counted at most once.
-public struct DiskDriveSnapshot: Sendable, Equatable, Identifiable {
+public struct DiskDriveSnapshot: Sendable, Equatable, Identifiable, Codable {
     public let id: String
     public let name: String
     public let isInternal: Bool?
     public let volumes: [DiskSnapshot]
     public let totalBytes: Double?
     public let available: MetricReading
+    private let registryID: UInt64?
     private let systemCapacity: DiskSystemCapacity?
 
     init(id: String, name: String, isInternal: Bool?, volumes: [DiskSnapshot],
          totalBytes: Double?, availableBytes: Double?, at time: Double,
-         systemCapacity: DiskSystemCapacity? = nil) {
+         systemCapacity: DiskSystemCapacity? = nil, registryID: UInt64? = nil) {
+        self.registryID = registryID
         self.id = id
         self.name = name
         self.isInternal = isInternal
@@ -100,6 +102,18 @@ public struct DiskDriveSnapshot: Sendable, Equatable, Identifiable {
                                   status: reportedAvailable == nil ? .unavailable(.unsupported) : .valid,
                                   timestamp: reportedAvailable == nil ? nil : time, source: .disk,
                                   quality: systemCapacity == nil ? .observed : .estimated)
+    }
+
+    public func capacityKey(_ metric: CapacityStatistic) -> SeriesKey {
+        .capacity(registryID.map { "\(id)@\($0)" } ?? "\(id)-\(name)", metric)
+    }
+
+    public var capacityReadings: [(CapacityStatistic, MetricReading)] {
+        var rows: [(CapacityStatistic, MetricReading)] = [(.used, used), (.available, available)]
+        if let allocated { rows.append((.allocated, allocated)) }
+        if let reclaimable { rows.append((.reclaimable, reclaimable)) }
+        rows += volumes.map { (.volume($0.id), $0.used) }
+        return rows
     }
 
     public var capacityScopeName: String? { systemCapacity?.name }

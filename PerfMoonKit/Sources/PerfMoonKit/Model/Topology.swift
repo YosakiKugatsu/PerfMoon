@@ -4,10 +4,10 @@
 import Foundation
 
 /// Hardware CPU tier. A machine may have any verified subset of these tiers.
-public enum CoreCluster: String, Sendable, CaseIterable, Hashable {
-    case e
+public enum CoreCluster: String, Sendable, CaseIterable, Hashable, Codable {
     case s
     case p
+    case e
 
     public var title: String {
         switch self {
@@ -35,7 +35,7 @@ public enum CoreCluster: String, Sendable, CaseIterable, Hashable {
 }
 
 /// A core in display order, with its independently verified Mach slot.
-public struct CoreID: Hashable, Sendable, Identifiable {
+public struct CoreID: Hashable, Sendable, Identifiable, Codable {
     // Retained for the original preview fixture, not for live hardware discovery.
     public static let sCount = 6
     public static let pCount = 12
@@ -78,7 +78,7 @@ public struct CoreID: Hashable, Sendable, Identifiable {
     public var id: Int { flatIndex }
 }
 
-public struct CPUClusterTopology: Sendable, Equatable, Identifiable {
+public struct CPUClusterTopology: Sendable, Equatable, Identifiable, Codable {
     public let role: CoreCluster
     public let title: String
     public let cores: [CoreID]
@@ -86,7 +86,7 @@ public struct CPUClusterTopology: Sendable, Equatable, Identifiable {
     public var id: CoreCluster { role }
 }
 
-public struct CPUTopology: Sendable, Equatable {
+public struct CPUTopology: Sendable, Equatable, Codable {
     public let logicalCPUCount: Int
     public let clusters: [CPUClusterTopology]
     public let cores: [CoreID]
@@ -100,7 +100,9 @@ public struct CPUTopology: Sendable, Equatable {
 
     private init(logicalCPUCount: Int, clusters: [CPUClusterTopology]) {
         self.logicalCPUCount = logicalCPUCount
-        self.clusters = clusters
+        // UI order is independent of flat indices used by stored selections,
+        // temperature mappings and history. Keep those identities stable.
+        self.clusters = CoreCluster.allCases.compactMap { role in clusters.first { $0.role == role } }
         self.cores = clusters.flatMap(\.cores)
     }
 
@@ -190,7 +192,7 @@ public struct CPUTopology: Sendable, Equatable {
     }
 }
 
-public struct MachineInfo: Sendable, Equatable {
+public struct MachineInfo: Sendable, Equatable, Codable {
     public var chipName: String
     public var shortChipName: String
     public var gpuCoreCount: Int
@@ -207,7 +209,7 @@ public struct MachineInfo: Sendable, Equatable {
     }
 }
 
-public enum SensorCategory: String, Sendable, CaseIterable, Hashable, Identifiable {
+public enum SensorCategory: String, Sendable, CaseIterable, Hashable, Identifiable, Codable {
     case cpu, gpu, soc, memory, battery, storage, other
 
     public var id: String { rawValue }
@@ -225,7 +227,7 @@ public enum SensorCategory: String, Sendable, CaseIterable, Hashable, Identifiab
     }
 }
 
-public struct SensorInfo: Sendable, Hashable, Identifiable {
+public struct SensorInfo: Sendable, Hashable, Identifiable, Codable {
     /// Hardware key, shown as-is and never translated.
     public var id: String
     public var name: String
@@ -350,6 +352,8 @@ public enum TimeRange: Int, Sendable, CaseIterable, Identifiable {
     case oneMinute = 60
     case fiveMinutes = 300
     case fifteenMinutes = 900
+    case oneHour = 3600
+    case sixHours = 21600
 
     public var id: Int { rawValue }
     public var seconds: TimeInterval { TimeInterval(rawValue) }
@@ -359,6 +363,8 @@ public enum TimeRange: Int, Sendable, CaseIterable, Identifiable {
         case .oneMinute: "1m"
         case .fiveMinutes: "5m"
         case .fifteenMinutes: "15m"
+        case .oneHour: "1h"
+        case .sixHours: "6h"
         }
     }
 
@@ -367,6 +373,8 @@ public enum TimeRange: Int, Sendable, CaseIterable, Identifiable {
         case .oneMinute: "1 minute"
         case .fiveMinutes: "5 minutes"
         case .fifteenMinutes: "15 minutes"
+        case .oneHour: "1 hour"
+        case .sixHours: "6 hours"
         }
     }
 }
@@ -377,6 +385,9 @@ public enum MenuBarMetric: String, Sendable, CaseIterable, Identifiable {
     case systemPower
     case cpuTemperature
     case memoryUsed
+    case networkDownload, networkUpload
+
+    public var usesNetwork: Bool { self == .networkDownload || self == .networkUpload }
 
     public var id: String { rawValue }
 
@@ -387,6 +398,8 @@ public enum MenuBarMetric: String, Sendable, CaseIterable, Identifiable {
         case .systemPower: "System Power"
         case .cpuTemperature: "CPU Temperature"
         case .memoryUsed: "Memory Used"
+        case .networkDownload: "Network Download"
+        case .networkUpload: "Network Upload"
         }
     }
 }

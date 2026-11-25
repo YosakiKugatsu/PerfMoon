@@ -579,3 +579,113 @@ int pm_report_read(PMReport *c, PMReportValues *out) {
 }
 
 bool pm_report_sample(PMReport *c, PMReportValues *out) { return pm_report_read(c, out) > 0 && out->valid != 0; }
+
+// Per-core Energy Model counters are refreshed by Apple's privileged sampler.
+// Subscribe only to individually identified cores and the reference CPU counter.
+struct PMCoreEnergy {
+    IOReportSubscriptionRef subscription;
+    CFMutableDictionaryRef channels;
+    CFDictionaryRef previous;
+    CFMutableDictionaryRef indices;
+    double *joules;
+    double previous_time;
+};
+
+PMCoreEnergy *pm_core_energy_open(const PMCoreLocation *locations, size_t count) {
+    if (!locations || !count) return NULL;
+    CFDictionaryRef group = IOReportCopyChannelsInGroup(CFSTR("Energy Model"), NULL, 0, 0, 0);
+    CFArrayRef all = channels_in(group);
+    if (!all) { if (group) CFRelease(group); return NULL; }
+    PMCoreEnergy *c = calloc(1, sizeof(*c));
+    if (!c) { CFRelease(group); return NULL; }
+    c->joules = calloc(count, sizeof(*c->joules));
+    if (!c->joules) { CFRelease(group); free(c); return NULL; }
+    c->indices = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFMutableArrayRef selected = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
+    for (size_t core = 0; core < count; core++) {
+        PMCoreLocation loc = locations[core];
+        if (!loc.tier) continue;
+        bool only_cluster = true;
+        for (size_t j = 0; j < count; j++) {
+            if (locations[j].tier == loc.tier && locations[j].cluster != loc.cluster) only_cluster = false;
+        }
+        char numbered[48], single[48];
+        snprintf(numbered, sizeof(numbered), "%cCPU%u_%u", loc.tier, loc.cluster, loc.slot);
+        snprintf(single, sizeof(single), "%cACC_%u", loc.tier, loc.slot);
+        CFDictionaryRef match = NULL;
+        for (CFIndex j = 0; j < CFArrayGetCount(all); j++) {
+            CFDictionaryRef item = CFArrayGetValueAtIndex(all, j);
+            char label[80];
+            text(IOReportChannelGetChannelName(item), label, sizeof(label));
+            if (strcmp(label, numbered) && (!only_cluster || strcmp(label, single))) continue;
+            if (match) { match = NULL; break; }  // Ambiguous across drivers or dies.
+            if (joules_per_unit(item) > 0) match = item;
+        }
+        if (match) {
+            CFStringRef name = IOReportChannelGetChannelName(match);
+            c->joules[core] = joules_per_unit(match);
+            put_number(c->indices, name, (int64_t)core);
+            CFArrayAppendValue(selected, match);
+        }
+    }
+    bool reference = false;
+    for (CFIndex j = 0; j < CFArrayGetCount(all); j++) {
+        CFDictionaryRef item = CFArrayGetValueAtIndex(all, j);
+        CFStringRef name = IOReportChannelGetChannelName(item);
+        if (name && CFEqual(name, CFSTR("CPU Energy")) && joules_per_unit(item) > 0) {
+            if (reference) { reference = false; break; }
+            CFArrayAppendValue(selected, item);
+            reference = true;
+        }
+    }
+    if (reference && CFDictionaryGetCount(c->indices) > 0) {
+        CFMutableDictionaryRef request = CFDictionaryCreateMutableCopy(NULL, 0, group);
+        CFDictionarySetValue(request, CFSTR("IOReportChannels"), selected);
+        c->subscription = IOReportCreateSubscription(NULL, request, &c->channels, 0, NULL);
+        CFRelease(request);
+    }
+    CFRelease(selected);
+    CFRelease(group);
+    if (!c->subscription || !c->channels) { pm_core_energy_close(c); return NULL; }
+    return c;
+}
+
+void pm_core_energy_close(PMCoreEnergy *c) {
+    if (!c) return;
+    if (c->previous) CFRelease(c->previous);
+    if (c->subscription) CFRelease(c->subscription);
+    if (c->channels) CFRelease(c->channels);
+    if (c->indices) CFRelease(c->indices);
+    free(c->joules);
+    free(c);
+}
+
+bool pm_core_energy_read(PMCoreEnergy *c, double *watts, size_t count, double *elapsed) {
+    if (!c || !watts || !elapsed) return false;
+    CFDictionaryRef current = IOReportCreateSamples(c->subscription, c->channels, NULL);
+    if (!current) return false;
+    double now = now_seconds();
+    *elapsed = now - c->previous_time;
+    CFDictionaryRef delta = c->previous ? IOReportCreateSamplesDelta(c->previous, current, NULL) : NULL;
+    if (c->previous) CFRelease(c->previous);
+    c->previous = current;
+    c->previous_time = now;
+    if (!delta) return false;
+    CFArrayRef list = channels_in(delta);
+    bool advancing = false;
+    for (size_t i = 0; i < count; i++) watts[i] = NAN;
+    for (CFIndex i = 0; list && *elapsed > 0 && i < CFArrayGetCount(list); i++) {
+        CFDictionaryRef item = CFArrayGetValueAtIndex(list, i);
+        CFStringRef name = IOReportChannelGetChannelName(item);
+        if (!name) continue;
+        int64_t value = IOReportSimpleGetIntegerValue(item, 0);
+        if (CFEqual(name, CFSTR("CPU Energy"))) { advancing = value > 0; continue; }
+        CFNumberRef index = CFDictionaryGetValue(c->indices, name);
+        int n = -1;
+        if (value >= 0 && index && CFNumberGetValue(index, kCFNumberIntType, &n) && n >= 0 && (size_t)n < count) {
+            watts[n] = (double)value * c->joules[n] / *elapsed;
+        }
+    }
+    CFRelease(delta);
+    return advancing;
+}

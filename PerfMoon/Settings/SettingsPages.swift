@@ -23,6 +23,13 @@ struct GeneralSettingsPage: View {
                 }
             }
             Section {
+                Toggle("Continuous Collection", isOn: $settings.continuousHistory)
+            } footer: {
+                Text("Keep all chart histories while PerfMoon runs, including with windows closed or the screen locked. Pause and system sleep leave gaps.")
+                    .font(.pmCaption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
                 Picker("Temperature Unit", selection: $settings.temperatureUnit) {
                     ForEach(TemperatureUnit.allCases) { unit in
                         Text(unit.title).tag(unit)
@@ -425,7 +432,7 @@ struct PerformanceSettingsPage: View {
             } header: {
                 Text("PerfMoon")
             } footer: {
-                Text("Measured every 10 s while this page is open. CPU is a share of one core.")
+                Text("Includes the app, root collector, and active power sampler. Measured every 10 s. CPU is a share of one core.")
                     .font(.pmCaption)
                     .foregroundStyle(.secondary)
             }
@@ -454,12 +461,24 @@ struct PerformanceSettingsPage: View {
 
 struct DataSourcesSettingsPage: View {
     let support: SupportModel
+    let settings: AppSettings
+    let authorize: () -> Void
     let retry: (SourceID) -> Void
 
     @Environment(\.isLiveData) private var isLiveData
 
     var body: some View {
         Form {
+            if isLiveData {
+                LabeledContent("Collector") {
+                    if settings.collectorConnected {
+                        Label("Running as root", systemImage: "checkmark.circle").foregroundStyle(.secondary)
+                    } else {
+                        Button(settings.authorizingCollector ? "Authorizing…" : "Authorize…", action: authorize)
+                            .disabled(settings.authorizingCollector)
+                    }
+                }
+            }
             Section {
                 ForEach(support.sources) { status in
                     SourceRow(status: status, retry: retry)

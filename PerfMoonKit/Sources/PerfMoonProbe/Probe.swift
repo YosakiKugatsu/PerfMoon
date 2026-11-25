@@ -11,6 +11,10 @@ struct PerfMoonProbe {
     @MainActor
     static func main() async throws {
         let args = CommandLine.arguments
+        if args.count == 3, args[1] == "--root-collector" {
+            await CollectorServer.run(socketPath: args[2])
+            return
+        }
         if args.contains("--benchmark-history") {
             benchmarkHistory()
             return
@@ -22,7 +26,12 @@ struct PerfMoonProbe {
         let duration = max(1, Double(option("--seconds", fallback: "30")) ?? 30)
         let interval = Double(option("--interval", fallback: "1")) ?? 1
         let mode = option("--mode", fallback: "overview")
-        let native = NativeMetricProvider(recordTimings: true)
+        let direct = geteuid() == 0 ? NativeMetricProvider(recordTimings: true) : nil
+        let broker = direct == nil ? RootMetricProvider(executable: URL(fileURLWithPath: args[0])) : nil
+        let native: any MetricProvider
+        if let direct { native = direct }
+        else if let broker, broker.isRootConnected { native = broker }
+        else { throw CocoaError(.userCancelled, userInfo: [NSLocalizedDescriptionKey: "Root collector could not start"]) }
         let engine = MonitorEngine(fixtures: FixtureProvider(), liveProvider: native)
         engine.start(scenario: .typical, interval: UpdateInterval(rawValue: interval) ?? .one, temperatureSource: .cpuMax)
         if mode == "sensors" { engine.setDemand(.sensorTable, active: true) }
@@ -31,13 +40,20 @@ struct PerfMoonProbe {
             engine.setDemand(.coreHistory, active: true)
         }
         if args.contains("--core-history") { engine.setDemand(.coreHistory, active: true) }
-        if mode == "processes" { engine.setDemand(.memoryProcesses, active: true) }
+        if mode == "processes" { engine.setDemand(.windowMemoryProcesses, active: true) }
+        if mode == "core-power" {
+            engine.setDemand(.popover, active: true)
+            engine.setDemand(.panelCorePower, active: true)
+        }
+        if mode == "menu-network" { engine.setDemand(.menuNetwork, active: true) }
+        if args.contains("--interface") { engine.setNetworkInterface(option("--interface", fallback: "")) }
+        if args.contains("--overhead") { engine.setDemand(.performancePage, active: true) }
         let topology = native.machine.cpuTopology
         emit(["type": "configuration", "chip": native.machine.chipName,
               "memoryBytes": native.machine.physicalMemory, "gpuCores": native.machine.gpuCoreCount,
               "logicalCPUs": topology.logicalCPUCount,
               "cpuClusters": topology.clusters.map { ["title": $0.title, "count": $0.count] },
-              "sensors": native.sensors.count, "mode": mode, "interval": interval])
+              "collectorUID": 0, "sensors": native.sensors.count, "mode": mode, "interval": interval])
         if args.contains("--exercise") {
             try await exercise(engine)
             return
@@ -76,6 +92,26 @@ struct PerfMoonProbe {
                      "reclaimable": $0.reclaimable?.shownValue as Any? ?? NSNull()]
                 }
             }
+            if !s.diskActivity.isEmpty {
+                metrics["diskActivity"] = s.diskActivity.map { disk in
+                    ["device": disk.device, "readBps": disk.bytes.incoming.shownValue as Any? ?? NSNull(),
+                     "writeBps": disk.bytes.outgoing.shownValue as Any? ?? NSNull(),
+                     "readIOPS": disk.operations.incoming.shownValue as Any? ?? NSNull(),
+                     "writeIOPS": disk.operations.outgoing.shownValue as Any? ?? NSNull()] as [String: Any]
+                }
+            }
+            if let link = s.network.selected { metrics["interface"] = link.id }
+            put("downloadBps", s.network.rates.incoming)
+            put("uploadBps", s.network.rates.outgoing)
+            if mode == "network" { metrics["availableInterfaces"] = s.network.interfaces.map(\.id) }
+            if mode == "core-power" {
+                metrics["coreWatts"] = s.cpu.corePowers.map { $0.shownValue as Any? ?? NSNull() }
+                metrics["coreTemperatures"] = s.cpu.coreTemperatures.map { $0?.shownValue as Any? ?? NSNull() }
+            }
+            if args.contains("--overhead") {
+                put("monitorCPU", engine.core.selfUsage.cpu)
+                put("monitorFootprint", engine.core.selfUsage.footprint)
+            }
             put("inputW", s.power.input); put("systemW", s.power.system); put("batteryW", s.power.battery)
             put("batteryState", s.power.batteryState); put("adapterConnected", s.power.adapterConnected)
             metrics["type"] = "sample"; metrics["epoch"] = Date().timeIntervalSince1970
@@ -87,6 +123,9 @@ struct PerfMoonProbe {
             metrics["gpuThrottling"] = native.gpuThrottleStatus.isAvailable ? native.gpuThrottleStatus.isActive as Any : NSNull()
             metrics["corePercent"] = s.cpu.cores.map { $0.value as Any? ?? NSNull() }
             if mode == "processes" || mode == "memory" {
+                metrics["topCPU"] = s.memory.processes.byCPU.map(\.cpuPercent)
+                metrics["topReads"] = s.memory.processes.byRead.map(\.readBytesPerSecond)
+                metrics["topWrites"] = s.memory.processes.byWrite.map(\.writeBytesPerSecond)
                 metrics["inaccessibleProcesses"] = native.processMemory.inaccessibleProcessCount
                 metrics["processes"] = native.processMemory.entries.map {
                     ["pid": $0.pid, "name": $0.name, "bytes": $0.memoryBytes] as [String: Any]
@@ -95,7 +134,7 @@ struct PerfMoonProbe {
             emit(metrics)
         }
         emit(["type": "summary", "sampleCount": engine.core.sampleCount, "wakeCount": engine.wakeCount,
-              "maxSampleMilliseconds": Dictionary(uniqueKeysWithValues: native.maximumSampleMilliseconds.map { ($0.key.rawValue, $0.value) }),
+              "maxSampleMilliseconds": Dictionary(uniqueKeysWithValues: (direct?.maximumSampleMilliseconds ?? [:]).map { ($0.key.rawValue, $0.value) }),
               "historyCounts": Dictionary(uniqueKeysWithValues: engine.history.recordedKeys.map { ($0.rawValue, engine.history.count($0)) })])
         engine.setUserPaused(true)
     }
@@ -115,7 +154,7 @@ struct PerfMoonProbe {
             let elapsed = start.duration(to: .now)
             let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
             let coreBytes = core.history.recordedKeys.filter(\.isPerCore).reduce(0) { total, key in
-                total + (core.history.series(key).map { $0.capacity * MemoryLayout<HistorySample>.stride } ?? 0)
+                total + core.history.bufferBytes(key)
             }
             let aggregateCounts = Dictionary(uniqueKeysWithValues: SeriesKey.aggregateKeys.map { ($0.rawValue, core.history.count($0)) })
             emit(["type": "historyBenchmark", "trial": trial, "coreHistory": active,
@@ -126,7 +165,7 @@ struct PerfMoonProbe {
 
     @MainActor
     private static func exercise(_ engine: MonitorEngine) async throws {
-        var usage = SelfUsageSampler()
+        var directUsage = SelfUsageSampler()
         try await Task.sleep(for: .seconds(3))
         for index in 0..<30 {
             engine.setUserPaused(true)
@@ -144,7 +183,7 @@ struct PerfMoonProbe {
                 try await Task.sleep(for: .seconds(1))
                 precondition(engine.core.sources[.sensors]?.phase == .active, "SMC retry did not reopen")
             }
-            let current = usage.sample(at: MonitorEngine.now, window: 1)
+            let current = engine.core.provider.selfUsage(at: MonitorEngine.now, window: 1) ?? directUsage.sample(at: MonitorEngine.now, window: 1)
             emit(["type": "lifecycle", "cycle": index + 1, "samples": engine.core.sampleCount,
                   "footprintBytes": current.footprint.value ?? -1,
                   "energyWindow": engine.snapshot.cpu.power.window,

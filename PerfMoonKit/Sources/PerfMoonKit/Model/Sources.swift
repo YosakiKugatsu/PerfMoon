@@ -4,7 +4,7 @@
 import Foundation
 
 /// A collection source. Failures are isolated per source.
-public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
+public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable, Codable {
     case cpuActivity
     case cpuFrequency
     case energy
@@ -14,6 +14,7 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
     case memory
     case memoryPressure
     case disk
+    case diskActivity, network, corePower
     case thermal
     case processMemory
 
@@ -30,8 +31,11 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
         case .memory: "Memory"
         case .memoryPressure: "Memory Pressure"
         case .disk: "Local Disk Volumes"
+        case .corePower: "Per-Core Power"
+        case .diskActivity: "Disk Activity"
+        case .network: "Network Traffic"
         case .thermal: "Thermal Limits"
-        case .processMemory: "Process Memory"
+        case .processMemory: "Process Activity"
         }
     }
 
@@ -46,6 +50,9 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
         case .memory: "Mach VM"
         case .memoryPressure: "Kernel"
         case .disk: "Filesystem (statfs)"
+        case .corePower: "IOReport · powermetrics"
+        case .diskActivity: "IOBlockStorageDriver"
+        case .network: "64-bit Interface MIB"
         case .thermal: "Power Management"
         case .processMemory: "libproc"
         }
@@ -54,8 +61,8 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
     /// Differenced sources need one baseline cycle after (re)subscribing, resuming, or waking.
     public var isDifferenced: Bool {
         switch self {
-        case .cpuActivity, .cpuFrequency, .energy, .gpuActivity, .memory: true
-        case .sensors, .battery, .memoryPressure, .disk, .thermal, .processMemory: false
+        case .cpuActivity, .cpuFrequency, .energy, .gpuActivity, .memory, .diskActivity, .network, .corePower, .processMemory: true
+        case .sensors, .battery, .memoryPressure, .disk, .thermal: false
         }
     }
 
@@ -109,10 +116,17 @@ public enum SourceID: String, Sendable, CaseIterable, Identifiable, Hashable {
                 MetricDescriptor("Total and Available Capacity", quality: .observed, window: .instant),
                 MetricDescriptor("Used Capacity", quality: .derived, window: .instant),
             ]
+        case .corePower:
+            [MetricDescriptor("Individual Core Power", quality: .estimated, window: .updateInterval)]
+        case .diskActivity:
+            [MetricDescriptor("Read and Write Throughput, IOPS", quality: .derived, window: .updateInterval)]
+        case .network:
+            [MetricDescriptor("Interface Download and Upload", quality: .derived, window: .updateInterval)]
         case .thermal:
             [MetricDescriptor("Thermal Throttling", quality: .observed, window: .instant)]
         case .processMemory:
-            [MetricDescriptor("Top 10 Physical Footprints", quality: .observed, window: .instant)]
+            [MetricDescriptor("Top 10 Physical Footprints", quality: .observed, window: .instant),
+             MetricDescriptor("Top 10 CPU, Disk Reads and Writes", quality: .derived, window: .updateInterval)]
         }
     }
 }
@@ -146,7 +160,7 @@ public struct MetricDescriptor: Sendable, Identifiable, Hashable {
 }
 
 /// A unit of scheduled work. Several jobs can share one source.
-public enum JobID: String, Sendable, CaseIterable, Hashable {
+public enum JobID: String, Sendable, CaseIterable, Hashable, Codable {
     case cpuActivity
     case cpuFrequency
     case energy
@@ -157,6 +171,7 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
     case memory
     case memoryPressure
     case disk
+    case diskActivity, network, corePower
     case sensorCatalog
     case selfUsage
     case thermal
@@ -173,6 +188,9 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
         case .memory: .memory
         case .memoryPressure: .memoryPressure
         case .disk: .disk
+        case .corePower: .corePower
+        case .diskActivity: .diskActivity
+        case .network: .network
         case .selfUsage: nil
         case .thermal: .thermal
         case .processMemory: .processMemory
@@ -182,7 +200,7 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
     /// Jobs that refresh at the visible rate when something on screen needs them.
     public var isPrimary: Bool {
         switch self {
-        case .temperatures, .sensorCatalog, .selfUsage, .thermal, .processMemory, .disk: false
+        case .temperatures, .sensorCatalog, .selfUsage, .thermal, .processMemory, .disk, .corePower, .network, .diskActivity: false
         default: true
         }
     }
@@ -202,14 +220,15 @@ public enum JobID: String, Sendable, CaseIterable, Hashable {
                 .memoryPurgeable, .memoryReusable, .memoryFree, .swapUsed, .pageIns, .pageOuts, .swapIns, .swapOuts,
             ]
         case .memoryPressure: [.memoryPressure]
-        case .temperatures, .sensorCatalog, .selfUsage, .thermal, .processMemory, .disk: []
+        case .temperatures, .sensorCatalog, .selfUsage, .thermal, .processMemory, .disk, .diskActivity, .network, .corePower: []
         }
     }
 }
 
-public enum MetricKey: Hashable, Sendable {
+public enum MetricKey: Hashable, Sendable, Codable {
     case cpuTotal, cpuE, cpuS, cpuP
     case core(Int)
+    case corePower(Int)
     case cpuFrequencyE, cpuFrequencyS, cpuFrequencyP
     case cpuPower, gpuPower, anePower
     case gpuUsage, gpuFrequency
@@ -229,7 +248,7 @@ public enum MetricKey: Hashable, Sendable {
         switch self {
         case .cpuTotal, .cpuE, .cpuS, .cpuP, .core, .cpuFrequencyE, .cpuFrequencyS, .cpuFrequencyP,
              .cpuPower, .gpuPower, .anePower, .gpuUsage, .gpuFrequency,
-             .pageIns, .pageOuts, .swapIns, .swapOuts:
+             .pageIns, .pageOuts, .swapIns, .swapOuts, .corePower:
             true
         default:
             false
@@ -240,7 +259,7 @@ public enum MetricKey: Hashable, Sendable {
         switch self {
         case .cpuTotal, .cpuE, .cpuS, .cpuP, .core, .gpuUsage: .percent
         case .cpuFrequencyE, .cpuFrequencyS, .cpuFrequencyP, .gpuFrequency: .gigahertz
-        case .cpuPower, .gpuPower, .anePower, .powerInput, .powerSystem, .powerBattery: .watts
+        case .corePower, .cpuPower, .gpuPower, .anePower, .powerInput, .powerSystem, .powerBattery: .watts
         case .batteryState, .adapterConnected, .memoryPressure: .level
         case .memoryUsed, .memoryApp, .memoryWired, .memoryCompressed, .memoryCached,
              .memoryPurgeable, .memoryReusable, .memoryFree, .swapUsed:
@@ -252,7 +271,7 @@ public enum MetricKey: Hashable, Sendable {
 
     public var quality: MetricQuality {
         switch self {
-        case .cpuPower, .gpuPower, .anePower: .estimated
+        case .corePower, .cpuPower, .gpuPower, .anePower: .estimated
         case .cpuTotal, .cpuE, .cpuS, .cpuP, .core, .cpuFrequencyE, .cpuFrequencyS, .cpuFrequencyP, .gpuUsage, .gpuFrequency,
              .memoryUsed, .pageIns, .pageOuts, .swapIns, .swapOuts, .cpuTemperature, .gpuTemperature:
             .derived
@@ -267,6 +286,7 @@ public enum MetricKey: Hashable, Sendable {
         case .cpuS: .cpuS
         case .cpuP: .cpuP
         case .core(let index) where index >= 0: .coreUsageIndex(index)
+        case .corePower(let index): .corePowerIndex(index)
         case .cpuFrequencyE: .cpuFrequencyE
         case .cpuFrequencyS: .cpuFrequencyS
         case .cpuFrequencyP: .cpuFrequencyP
@@ -278,6 +298,18 @@ public enum MetricKey: Hashable, Sendable {
         case .gpuPower: .gpuPower
         case .anePower: .anePower
         case .memoryUsed: .memoryUsed
+        case .memoryApp: .memoryDetail(.app)
+        case .memoryWired: .memoryDetail(.wired)
+        case .memoryCompressed: .memoryDetail(.compressed)
+        case .memoryCached: .memoryDetail(.cached)
+        case .memoryPurgeable: .memoryDetail(.purgeable)
+        case .memoryReusable: .memoryDetail(.reusable)
+        case .memoryFree: .memoryDetail(.free)
+        case .swapUsed: .memoryDetail(.swapUsed)
+        case .pageIns: .memoryDetail(.pageIns)
+        case .pageOuts: .memoryDetail(.pageOuts)
+        case .swapIns: .memoryDetail(.swapIns)
+        case .swapOuts: .memoryDetail(.swapOuts)
         case .memoryPressure: .memoryPressure
         case .powerInput: .powerInput
         case .powerSystem: .powerSystem
@@ -291,6 +323,8 @@ public enum MetricKey: Hashable, Sendable {
 /// Something on screen that needs data. The menu bar is the implicit background demand.
 public enum Demand: Hashable, Sendable {
     case popover
+    case menuNetwork
+    case panelCorePower, panelCoreTemperatures, panelNetwork, panelDiskActivity
     case window(Page)
     case sensorTable
     case performancePage
@@ -299,10 +333,12 @@ public enum Demand: Hashable, Sendable {
     case windowMemoryProcesses
     /// Records per-core history while the main window is visible. Adds no collection jobs.
     case coreHistory
+    case continuousHistory
+    case coreInspector
 }
 
 public enum Page: String, CaseIterable, Sendable, Identifiable, Hashable {
-    case overview, cpu, gpu, memory, disk, power
+    case overview, cpu, gpu, memory, disk, network, power
 
     public var id: String { rawValue }
 
@@ -313,6 +349,7 @@ public enum Page: String, CaseIterable, Sendable, Identifiable, Hashable {
         case .gpu: "GPU & ANE"
         case .memory: "Memory"
         case .disk: "Disk"
+        case .network: "Network"
         case .power: "Power"
         }
     }
@@ -320,11 +357,12 @@ public enum Page: String, CaseIterable, Sendable, Identifiable, Hashable {
     /// Primary jobs refreshed at the visible rate while this page is on screen.
     public var primaryJobs: Set<JobID> {
         switch self {
-        case .overview: Set(JobID.allCases.filter(\.isPrimary))
+        case .overview: Set(JobID.allCases.filter(\.isPrimary)).union([.diskActivity, .network])
         case .cpu: [.cpuActivity, .cpuFrequency, .energy]
         case .gpu: [.gpuActivity, .energy]
         case .memory: [.memory, .memoryPressure]
-        case .disk: []
+        case .disk: [.diskActivity]
+        case .network: [.network]
         case .power: [.powerSensors, .battery, .energy]
         }
     }

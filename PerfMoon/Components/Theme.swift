@@ -14,6 +14,8 @@ enum Palette {
     static let ane = Color.purple
     static let power = Color.orange
     static let temperature = Color.pink
+    static let incoming = Color.teal
+    static let outgoing = Color.indigo
     /// Memory stays neutral so pressure color carries the meaning.
     static let memory = Color.primary.opacity(0.62)
     /// Storage is neutral too; the bar shows occupancy without implying a warning level.

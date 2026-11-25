@@ -207,7 +207,7 @@ enum SparklineScale {
 
     func label(_ value: Double, unit: TemperatureUnit) -> String {
         switch self {
-        case .percent: "\(Int(value.rounded()))%"
+        case .percent: Format.percent(value)
         case .watts: "\(Int(value.rounded())) W"
         case .gigahertz: value == 0 ? "0 GHz" : String(format: "%.1f GHz", value)
         case .temperature: Format.temperatureCompact(value, unit: unit)

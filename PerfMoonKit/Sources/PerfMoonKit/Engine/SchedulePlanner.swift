@@ -18,6 +18,8 @@ public enum SchedulePlanner {
     public static let diskFloor: TimeInterval = 30
 
     public static func intervals(userInterval: TimeInterval, demands: Set<Demand>) -> [JobID: TimeInterval] {
+        let continuous = demands.contains(.continuousHistory)
+        let background = max(userInterval, backgroundFloor)
         var visible = Set<JobID>()
         for demand in demands {
             switch demand {
@@ -25,7 +27,11 @@ public enum SchedulePlanner {
                 visible.formUnion(JobID.allCases.filter(\.isPrimary))
             case .window(let page):
                 visible.formUnion(page.primaryJobs)
-            case .sensorTable, .performancePage, .memoryProcesses, .windowMemoryProcesses, .coreHistory:
+            case .panelNetwork:
+                if demands.contains(.popover) { visible.insert(.network) }
+            case .panelDiskActivity:
+                if demands.contains(.popover) { visible.insert(.diskActivity) }
+            case .menuNetwork, .panelCorePower, .panelCoreTemperatures, .sensorTable, .performancePage, .memoryProcesses, .windowMemoryProcesses, .coreHistory, .coreInspector, .continuousHistory:
                 break
             }
         }
@@ -46,8 +52,20 @@ public enum SchedulePlanner {
             case .thermal:
                 // Add this after the regular cadence is known.
                 break
+            case .corePower:
+                let inspecting = demands.contains(.window(.cpu)) && demands.contains(.coreInspector)
+                if inspecting || (demands.contains(.popover) && demands.contains(.panelCorePower)) {
+                    result[job] = userInterval
+                } else if continuous {
+                    result[job] = background
+                }
+            case .diskActivity, .network:
+                if visible.contains(job) { result[job] = userInterval }
+                else if continuous || (job == .network && demands.contains(.menuNetwork)) {
+                    result[job] = background
+                }
             case .disk:
-                if demands.contains(.popover) || demands.contains(.window(.overview)) || demands.contains(.window(.disk)) {
+                if (demands.contains(.popover) && !demands.contains(.panelNetwork)) || demands.contains(.window(.overview)) || demands.contains(.window(.disk)) {
                     result[job] = max(userInterval, diskFloor)
                 }
             case .processMemory:
@@ -55,7 +73,7 @@ public enum SchedulePlanner {
                     result[job] = max(userInterval, 5)
                 }
             default:
-                result[job] = visible.contains(job) ? userInterval : max(userInterval, backgroundFloor)
+                result[job] = visible.contains(job) ? userInterval : background
             }
         }
         // Join an existing wake instead of publishing an extra snapshot between

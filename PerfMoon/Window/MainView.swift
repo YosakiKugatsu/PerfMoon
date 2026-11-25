@@ -6,8 +6,10 @@ import SwiftUI
 
 struct MainActions {
     var togglePause: () -> Void
+    var readDiskHealth: (String) async -> DiskHealthReport?
     var openSettings: (SettingsTab) -> Void
-    var setMemoryProcessListVisible: (Bool) -> Void
+    var setCoreInspectorVisible: (Bool) -> Void
+    var setProcessListVisible: (Bool, Page) -> Void
 }
 
 /// Time window and refresh trigger shared by every chart on a page.
@@ -36,7 +38,14 @@ struct MainView: View {
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
         } detail: {
-            detail
+            Group {
+                if settings.showsStatistics {
+                    StatisticsPage(page: settings.selectedPage, model: model, context: context, width: pageWidth,
+                                   setCoreInspectorVisible: actions.setCoreInspectorVisible, preferredInterface: $settings.networkInterface)
+                } else {
+                    detail
+                }
+            }
                 .onGeometryChange(for: CGFloat.self) { max(0, $0.size.width - PageMetrics.totalHorizontalPadding) } action: { pageWidth = $0 }
                 .navigationTitle(settings.selectedPage.title)
                 .navigationSubtitle(subtitle)
@@ -73,30 +82,51 @@ struct MainView: View {
         case .overview:
             OverviewPage(model: model, context: context, machine: machine, width: pageWidth) { settings.selectedPage = $0 }
         case .cpu:
-            CPUPage(model: model, context: context, openSensorSettings: { actions.openSettings(.cpu) }, settings: settings)
+            CPUPage(model: model, context: context, width: pageWidth, setCoreInspectorVisible: actions.setCoreInspectorVisible, openSensorSettings: { actions.openSettings(.cpu) }, settings: settings, setProcessListVisible: { actions.setProcessListVisible($0, .cpu) })
         case .gpu:
             GPUPage(model: model, context: context)
         case .memory:
-            MemoryPage(model: model, context: context, width: pageWidth, setProcessListVisible: actions.setMemoryProcessListVisible)
+            MemoryPage(model: model, context: context, width: pageWidth, setProcessListVisible: { actions.setProcessListVisible($0, .memory) })
         case .disk:
-            DiskPage(model: model)
+            DiskPage(model: model, context: context, width: pageWidth, setProcessListVisible: { actions.setProcessListVisible($0, .disk) },
+                     readDiskHealth: actions.readDiskHealth)
+        case .network:
+            NetworkPage(model: model, context: context, preferredInterface: $settings.networkInterface)
         case .power:
             PowerPage(model: model, context: context)
+        }
+    }
+
+    private var rangePicker: some View {
+        Picker("Time Range", selection: $settings.timeRange) {
+            ForEach(TimeRange.allCases) { range in
+                Text(range.shortTitle).tag(range).accessibilityLabel(range.spokenTitle)
+            }
         }
     }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Picker("Time Range", selection: $settings.timeRange) {
-                ForEach(TimeRange.allCases) { range in
-                    Text(range.shortTitle)
-                        .tag(range)
-                        .accessibilityLabel(range.spokenTitle)
+            if pageWidth < 690 {
+                Menu {
+                    rangePicker.pickerStyle(.inline)
+                } label: {
+                    Label(settings.timeRange.shortTitle, systemImage: "clock").labelStyle(.titleAndIcon)
                 }
+                .accessibilityLabel("Time Range")
+                .help("Time Range")
+            } else {
+                rangePicker.pickerStyle(.segmented).help("Time Range")
             }
-            .pickerStyle(.segmented)
-            .help("Time Range")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Toggle(isOn: $settings.showsStatistics) {
+                Label("Statistics", systemImage: "tablecells").labelStyle(.titleAndIcon)
+            }
+            .toggleStyle(.button)
+            .help(settings.showsStatistics ? "Show charts (⌥⌘I)" : "Show range statistics (⌥⌘I)")
+
         }
         ToolbarSpacer(.fixed, placement: .primaryAction)
         ToolbarItem(placement: .primaryAction) {
@@ -117,12 +147,12 @@ extension Page {
         case .gpu: "square.stack.3d.up"
         case .memory: "memorychip"
         case .disk: "internaldrive"
+        case .network: "network"
         case .power: "bolt"
         }
     }
 
-    /// ⌘1–⌘6 for the View menu and the panel. Disk was added after Power had ⌘5, so it
-    /// takes ⌘6 while appearing before Power.
+    /// Preserve the existing page shortcuts when adding Network after Disk.
     var shortcutKey: Character {
         switch self {
         case .overview: "1"
@@ -131,6 +161,7 @@ extension Page {
         case .memory: "4"
         case .power: "5"
         case .disk: "6"
+        case .network: "7"
         }
     }
 }
@@ -179,21 +210,20 @@ struct StatBlock<Value: View, Detail: View>: View {
     @ViewBuilder var detail: Detail
 
     var body: some View {
-        HStack(spacing: 0) {
-            if !isFirst {
-                ColumnDivider().padding(.trailing, 14)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(label)
-                    .font(.pmCaption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                value
-                detail
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .combine)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.pmCaption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            value
+            detail
         }
+        .padding(.leading, isFirst ? 0 : 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .overlay(alignment: .leading) {
+            if !isFirst { ColumnDivider().accessibilityHidden(true) }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
